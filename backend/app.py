@@ -1,6 +1,14 @@
 # app.py
+if __name__ == "__main__":
+    # Must run before anything else is imported. Flask-SocketIO uses eventlet with a
+    # Redis message queue; without patching, every socket connection fails with
+    # "Redis requires a monkey patched socket library to work with eventlet".
+    import eventlet
+    eventlet.monkey_patch()
+
 import os
-from flask import Flask, app, jsonify
+import sys
+from flask import Flask, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 
@@ -18,9 +26,17 @@ def create_app():
         ProdConfig if os.getenv("FLASK_ENV") == "production" else DevConfig
     )
 
+    if app.config.get("ENV_NAME") == "production":
+        secret = app.config.get("JWT_SECRET_KEY") or ""
+        if secret == "dev-change-me" or len(secret) < 32:
+            raise RuntimeError("JWT_SECRET_KEY must be set to a random value of 32+ characters in production")
+        if os.getenv("CORS_ORIGINS", "*").strip() == "*":
+            raise RuntimeError("CORS_ORIGINS must list your web app origin(s) in production, not '*'")
+
     init_extensions(app)
 
-    CORS(app, resources={r"/*": {"origins": os.getenv("CORS_ORIGINS", "*")}})
+    origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
+    CORS(app, resources={r"/*": {"origins": "*" if origins == ["*"] else origins}})
 
     # REST Blueprints
     from routes.auth          import router as auth_router
@@ -59,6 +75,20 @@ def create_app():
     from routes.sockets import register_socket_handlers
     register_socket_handlers()
 
+    # Consistent JSON errors — clients always get {"error": ...}, never an HTML page or traceback.
+    from werkzeug.exceptions import HTTPException
+
+    @app.errorhandler(HTTPException)
+    def handle_http_error(err):
+        if err.code is None or err.code < 400:
+            return err  # e.g. RequestRedirect (308 to the trailing-slash URL) must keep its Location
+        return jsonify({"error": err.description or err.name}), err.code
+
+    @app.errorhandler(Exception)
+    def handle_unexpected_error(err):
+        app.logger.exception("Unhandled error")
+        return jsonify({"error": "Something went wrong"}), 500
+
     @app.get("/ping")
     def ping():
         return jsonify({"ok": True})
@@ -77,9 +107,18 @@ def create_app():
             pass
         return jsonify({"status": "ok", "redis": redis_ok}), 200
 
-    with app.app_context():
-        from extensions import db
-        db.create_all()
+    # `flask db …` commands must let Alembic own the schema: creating tables here first
+    # makes the initial migration fail with "relation already exists" on a fresh database.
+    # Matches both `flask db upgrade` and `flask --app app.py db upgrade`.
+    running_migrations = os.path.basename(sys.argv[0]).startswith("flask") and "db" in sys.argv[1:4]
+    if not running_migrations:
+        with app.app_context():
+            from extensions import db
+            from sqlalchemy import text
+            # app_user.user_email uses CITEXT; the type must exist before create_all.
+            db.session.execute(text("CREATE EXTENSION IF NOT EXISTS citext"))
+            db.session.commit()
+            db.create_all()
 
     return app
 

@@ -50,8 +50,10 @@ class Config:
 
 class DevConfig(Config):
     DEBUG = True
+    ENV_NAME = "development"
     RATELIMIT_STORAGE_URI = os.getenv("REDIS_URL", "memory://")
 
 
 class ProdConfig(Config):
     DEBUG = False
+    ENV_NAME = "production"

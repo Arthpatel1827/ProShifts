@@ -1,7 +1,7 @@
 """v2 shift swap notification plan
 
 Revision ID: 72c06bf95b33
-Revises: 707f52f0a927
+Revises: 0b5f1c2d3e4a
 Create Date: 2026-05-13 13:33:58.612296
 
 """
@@ -11,7 +11,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = '72c06bf95b33'
-down_revision = '707f52f0a927'
+down_revision = '0b5f1c2d3e4a'
 branch_labels = None
 depends_on = None
 
@@ -23,7 +23,10 @@ def upgrade():
         # ✅ Fixed: existing rows get NOW() as default
         batch_op.add_column(sa.Column('created_at', sa.DateTime(), nullable=False,
                                       server_default=sa.text('NOW()')))
-        batch_op.drop_column('is_active')
+
+    # is_active was created by db.create_all() on early dev databases, never by a migration —
+    # drop it only if present so fresh databases can migrate from scratch.
+    op.execute("ALTER TABLE app_user DROP COLUMN IF EXISTS is_active")
 
     with op.batch_alter_table('company', schema=None) as batch_op:
         # ✅ Fixed: existing companies default to 'free' plan
