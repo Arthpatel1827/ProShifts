@@ -10,71 +10,40 @@ import {
     Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useMutation } from '@apollo/client/react';
 
 import { colors } from '../theme/colors';
 import { AuthContext } from '../context/AuthContext';
-import { UPDATE_PROFILE_MUTATION } from '../graphql/operations';
-
-// --- Types for the mutation result/variables --------------------
-
-type UpdateProfileResponse = {
-    updateProfile: {
-        user_id: number;
-        username: string;
-        user_email: string;
-        display_name?: string | null;
-        role?: string | null;
-        company?: { id: number; name: string } | null;
-        primaryLocation?: { id: number; name: string } | null;
-    };
-};
-
-type UpdateProfileVars = {
-    displayName?: string;
-    phone?: string;
-};
+import { AuthAPI } from '../api/api';
 
 export default function CompleteProfileScreen({ navigation }: any) {
     const { user, setUser } = useContext(AuthContext);
 
     const [displayName, setDisplayName] = useState(user?.display_name ?? '');
-    const [phone, setPhone] = useState('');
-
-    const [updateProfile, { loading }] = useMutation<
-        UpdateProfileResponse,
-        UpdateProfileVars
-    >(UPDATE_PROFILE_MUTATION);
+    const [loading, setLoading] = useState(false);
 
     // keep local state in sync if user changes in context
     useEffect(() => {
         setDisplayName(user?.display_name ?? '');
     }, [user?.display_name]);
 
+    // UPDATE_PROFILE_MUTATION never existed in graphql/operations, so this screen used to
+    // crash. Save through the existing REST endpoint (PATCH /auth/profile) instead.
     const handleSave = async () => {
         const trimmedName = displayName.trim();
-        const trimmedPhone = phone.trim();
 
         if (!trimmedName) {
             Alert.alert('Missing name', 'Please enter your display name.');
             return;
         }
+        if (trimmedName.length > 60) {
+            Alert.alert('Name too long', 'Display names must be under 60 characters.');
+            return;
+        }
 
+        setLoading(true);
         try {
-            const { data } = await updateProfile({
-                variables: {
-                    displayName: trimmedName,
-                    phone: trimmedPhone || undefined,
-                },
-            });
-
-            const updatedUser = data?.updateProfile;
-            if (!updatedUser) {
-                throw new Error('updateProfile returned no user');
-            }
-
-            // Push updated user into AuthContext
-            setUser(updatedUser);
+            await AuthAPI.updateProfile(trimmedName);
+            setUser(prev => (prev ? { ...prev, display_name: trimmedName } : prev));
 
             Alert.alert('Profile updated', 'Your profile has been saved.', [
                 {
@@ -83,11 +52,12 @@ export default function CompleteProfileScreen({ navigation }: any) {
                 },
             ]);
         } catch (err: any) {
-            console.error('[CompleteProfile] update error', err);
             Alert.alert(
                 'Error',
-                err?.message || 'Could not update your profile. Please try again.',
+                err?.response?.data?.error || 'Could not update your profile. Please try again.',
             );
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -105,18 +75,12 @@ export default function CompleteProfileScreen({ navigation }: any) {
                     onChangeText={setDisplayName}
                     placeholder="e.g. Neel Shah"
                     placeholderTextColor={colors.gray}
+                    maxLength={60}
                     style={styles.input}
                 />
-
-                <Text style={styles.label}>Phone (optional)</Text>
-                <TextInput
-                    value={phone}
-                    onChangeText={setPhone}
-                    placeholder="e.g. 647-555-1234"
-                    placeholderTextColor={colors.gray}
-                    keyboardType="phone-pad"
-                    style={styles.input}
-                />
+                <Text style={styles.hint}>
+                    Your manager keeps your phone and emergency contact on your employee profile.
+                </Text>
 
                 <Pressable
                     style={({ pressed }) => [
@@ -159,6 +123,11 @@ const styles = StyleSheet.create({
         color: colors.text,
         marginBottom: 4,
         marginTop: 10,
+    },
+    hint: {
+        fontSize: 12,
+        color: colors.gray,
+        marginTop: 6,
     },
     input: {
         borderWidth: 1,

@@ -12,7 +12,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons }     from '@expo/vector-icons';
 import { colors }       from '../theme/colors';
-import { TimeEntryAPI } from '../api/api';
+import { TimeEntryAPI, ShiftsAPI } from '../api/api';
+import ShiftRing    from '../components/home/ShiftRing';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -83,6 +84,8 @@ function isToday(iso: string): boolean {
 export default function TimesheetScreen({ navigation }: any) {
     const [entries,   setEntries]   = useState<TimeEntry[]>([]);
     const [summary,   setSummary]   = useState<WeeklySummary | null>(null);
+    // Paid hours on this week's published shifts — what the ring measures progress against.
+    const [scheduledHours, setScheduledHours] = useState<number | null>(null);
     const [loading,   setLoading]   = useState(true);
     const [refreshing, setRefreshing] = useState(false);
 
@@ -91,6 +94,19 @@ export default function TimesheetScreen({ navigation }: any) {
             const { data } = await TimeEntryAPI.getHistory(30);
             setEntries(data.entries   ?? []);
             setSummary(data.weekly_summary ?? null);
+            const weekStart = data.weekly_summary?.week_start;
+            if (weekStart) {
+                try {
+                    const res = await ShiftsAPI.mine(weekStart);
+                    const mins = (res.data.shifts ?? []).reduce((acc: number, s: any) => {
+                        const span = (new Date(s.end_time).getTime() - new Date(s.start_time).getTime()) / 60000;
+                        return acc + Math.max(span - (s.break_minutes ?? 0), 0);
+                    }, 0);
+                    setScheduledHours(Math.round((mins / 60) * 10) / 10);
+                } catch {
+                    setScheduledHours(null);
+                }
+            }
         } catch {
             setEntries([]);
         } finally {
@@ -245,23 +261,29 @@ export default function TimesheetScreen({ navigation }: any) {
                 <View style={styles.summaryCard}>
                     <Text style={styles.summaryCardTitle}>This Week</Text>
                     <View style={styles.summaryRow}>
-                        <SummaryItem
-                            icon="calendar-outline"
-                            value={String(summary.total_entries)}
-                            label="days"
-                        />
-                        <View style={styles.summaryDivider} />
-                        <SummaryItem
+                        <ShiftRing
+                            size={132}
+                            strokeWidth={11}
+                            tone={scheduledHours && summary.total_hours >= scheduledHours ? 'success' : 'primary'}
+                            progress={scheduledHours ? summary.total_hours / scheduledHours : summary.total_hours > 0 ? 1 : 0}
                             icon="time-outline"
-                            value={`${summary.total_hours}h`}
                             label="worked"
+                            primaryText={`${summary.total_hours}h`}
+                            secondaryText={scheduledHours ? `of ${scheduledHours}h` : 'no shifts'}
                         />
-                        <View style={styles.summaryDivider} />
-                        <SummaryItem
-                            icon="cafe-outline"
-                            value={`${summary.break_minutes}m`}
-                            label="breaks"
-                        />
+                        <View style={styles.summaryStats}>
+                            <SummaryItem
+                                icon="calendar-outline"
+                                value={String(summary.total_entries)}
+                                label="days"
+                            />
+                            <View style={styles.summaryRule} />
+                            <SummaryItem
+                                icon="cafe-outline"
+                                value={`${summary.break_minutes}m`}
+                                label="breaks"
+                            />
+                        </View>
                     </View>
                 </View>
             )}
@@ -379,8 +401,9 @@ const styles = StyleSheet.create({
         letterSpacing: 0.8,
         marginBottom: 12,
     },
-    summaryRow:     { flexDirection: 'row', alignItems: 'center' },
-    summaryDivider: { width: 1, height: 36, backgroundColor: '#EFEFEF', marginHorizontal: 16 },
+    summaryRow:     { flexDirection: 'row', alignItems: 'center', gap: 24 },
+    summaryStats:   { flex: 1, gap: 12 },
+    summaryRule:    { height: 1, backgroundColor: '#EFEFEF' },
 
     entryCard: {
         backgroundColor: '#fff',

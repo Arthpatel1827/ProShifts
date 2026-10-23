@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons }     from '@expo/vector-icons';
 import { colors }       from '../theme/colors';
 import { NotificationsAPI } from '../api/api';
+import ShiftRing from '../components/home/ShiftRing';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -163,9 +164,15 @@ export default function NotificationsScreen({ navigation }: any) {
     // ── Empty state ───────────────────────────────────────────────────────────
     const EmptyState = () => (
         <View style={styles.emptyContainer}>
-            <View style={styles.emptyIconWrap}>
-                <Ionicons name="notifications-off-outline" size={48} color={colors.gray} />
-            </View>
+            <ShiftRing
+                size={140}
+                strokeWidth={11}
+                tone="success"
+                progress={1}
+                icon="checkmark-done-outline"
+                label="inbox"
+                primaryText="0 new"
+            />
             <Text style={styles.emptyTitle}>All caught up!</Text>
             <Text style={styles.emptySubtitle}>
                 Notifications about your shifts, swaps and schedule will appear here.
@@ -232,6 +239,21 @@ export default function NotificationsScreen({ navigation }: any) {
                     keyExtractor={item => String(item.notif_id)}
                     renderItem={renderItem}
                     ListEmptyComponent={EmptyState}
+                    ListHeaderComponent={notifications.length > 0 ? (
+                        // Inbox progress: how much of what's here has been read.
+                        <View style={styles.ringHeader}>
+                            <ShiftRing
+                                size={140}
+                                strokeWidth={11}
+                                tone={unreadCount > 0 ? 'primary' : 'success'}
+                                progress={(notifications.length - Math.min(unreadCount, notifications.length)) / notifications.length}
+                                icon={unreadCount > 0 ? 'notifications-outline' : 'checkmark-done-outline'}
+                                label={unreadCount > 0 ? 'unread' : 'all caught up'}
+                                primaryText={unreadCount > 0 ? String(unreadCount) : 'Done'}
+                                secondaryText={`${notifications.length} total`}
+                            />
+                        </View>
+                    ) : null}
                     refreshControl={
                         <RefreshControl
                             refreshing={refreshing}
@@ -254,6 +276,7 @@ export default function NotificationsScreen({ navigation }: any) {
 
 const styles = StyleSheet.create({
     safe: { flex: 1, backgroundColor: '#F8F8FC' },
+    ringHeader: { alignItems: 'center', paddingVertical: 12, marginBottom: 4 },
 
     // Header
     header: {
@@ -370,15 +393,6 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         paddingHorizontal: 40,
         gap:            12,
-    },
-    emptyIconWrap: {
-        width:           80,
-        height:          80,
-        borderRadius:    40,
-        backgroundColor: '#F3F4F6',
-        alignItems:      'center',
-        justifyContent:  'center',
-        marginBottom:    8,
     },
     emptyTitle:    { fontSize: 18, fontWeight: '700', color: colors.text },
     emptySubtitle: {

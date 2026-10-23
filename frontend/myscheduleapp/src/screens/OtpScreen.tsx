@@ -1,17 +1,20 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
 
 export default function OtpScreen({ navigation, route }: any) {
     const [otp, setOtp] = useState('');
-    const [loading, setLoading] = useState(false);
 
-    const handleNext = async () => {
-        setLoading(true);
-        // you can verify OTP with backend here if implemented
-        setTimeout(() => {
-            setLoading(false);
-            navigation.navigate('ResetPassword', { token: otp });
-        }, 800);
+    const [error, setError] = useState('');
+
+    // The backend verifies the code together with the new password
+    // (POST /auth/forgot-password/confirm), so here we only check its shape.
+    const handleNext = () => {
+        if (!/^\d{6}$/.test(otp)) {
+            setError('Enter the 6-digit code from your email.');
+            return;
+        }
+        setError('');
+        navigation.navigate('ResetPassword', { token: otp });
     };
 
     return (
@@ -24,12 +27,18 @@ export default function OtpScreen({ navigation, route }: any) {
                 keyboardType="numeric"
                 maxLength={6}
                 placeholder="Enter code"
-                onChangeText={setOtp}
+                onChangeText={t => setOtp(t.replace(/\D/g, ''))}
                 value={otp}
             />
 
-            <TouchableOpacity style={styles.button} onPress={handleNext} disabled={loading || otp.length !== 6}>
-                {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Next</Text>}
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+
+            <TouchableOpacity
+                style={[styles.button, otp.length !== 6 && { opacity: 0.5 }]}
+                onPress={handleNext}
+                disabled={otp.length !== 6}
+            >
+                <Text style={styles.btnText}>Next</Text>
             </TouchableOpacity>
         </View>
     );
@@ -43,4 +52,5 @@ const styles = StyleSheet.create({
     input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 8, padding: 12, marginBottom: 16, textAlign: 'center', fontSize: 18, letterSpacing: 6 },
     button: { backgroundColor: PURPLE, borderRadius: 8, alignItems: 'center', paddingVertical: 14 },
     btnText: { color: '#fff', fontWeight: '600' },
+    error: { color: '#EF4444', marginBottom: 12, textAlign: 'center' },
 });

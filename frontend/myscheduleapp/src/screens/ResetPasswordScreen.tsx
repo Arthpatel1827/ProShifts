@@ -1,9 +1,8 @@
-import React, { useContext, useState } from 'react';
+import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
-import { AuthContext } from '../context/AuthContext';
+import { AuthAPI } from '../api/api';
 
 export default function ResetPasswordScreen({ navigation, route }: any) {
-    const { resetPassword } = useContext(AuthContext);
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [loading, setLoading] = useState(false);
@@ -11,9 +10,18 @@ export default function ResetPasswordScreen({ navigation, route }: any) {
     const token = route.params?.token;
 
     const handleSubmit = async () => {
+        if (newPassword.length < 8) {
+            setError('Password must be at least 8 characters.');
+            return;
+        }
+        if (newPassword !== confirmPassword) {
+            setError('Passwords do not match.');
+            return;
+        }
+        setError('');
         setLoading(true);
         try {
-            await resetPassword({ token, new_password: newPassword, confirm_password: confirmPassword });
+            await AuthAPI.resetPassword(token, newPassword, confirmPassword);
             navigation.navigate('PasswordChanged');
         } catch (e: any) {
             setError(e?.response?.data?.error || 'Reset failed');
