@@ -1,59 +1,84 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAccessToken, getRefreshToken, setSessionCookies, clearSessionCookies } from "@/lib/auth/session";
+import { FLASK_URL, refreshAccessToken } from "@/lib/auth/refresh";
 
-const FLASK_URL = process.env.FLASK_API_URL ?? "http://localhost:5000";
+// Response headers worth passing back to the browser. Everything else (cookies,
+// hop-by-hop headers, Flask's server header) stays on this side.
+const PASS_RESPONSE_HEADERS = ["content-type", "content-disposition", "cache-control", "etag", "last-modified"];
 
-async function forward(req: NextRequest, path: string[], retry = true): Promise<NextResponse> {
-    const accessToken = await getAccessToken();
-    const search = req.nextUrl.search;
-    const target = `${FLASK_URL}/${path.join("/")}${search}`;
+async function callFlask(req: NextRequest, path: string[], body: ArrayBuffer | undefined, token: string | undefined) {
+    const headers = new Headers();
+    const contentType = req.headers.get("content-type");
+    if (contentType) headers.set("Content-Type", contentType); // keeps multipart boundaries intact
+    const accept = req.headers.get("accept");
+    if (accept) headers.set("Accept", accept);
+    if (token) headers.set("Authorization", `Bearer ${token}`);
 
-    const init: RequestInit = {
+    // Keep a trailing slash if the caller sent one: Flask's collection routes are /shifts/, /drops/…
+    const slash = req.nextUrl.pathname.endsWith("/") ? "/" : "";
+    return fetch(`${FLASK_URL}/${path.map(encodeURIComponent).join("/")}${slash}${req.nextUrl.search}`, {
         method: req.method,
-        headers: {
-            "Content-Type": "application/json",
-            ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-        },
-    };
+        headers,
+        body,
+        cache: "no-store",
+        // Flask may still 308 between /x and /x/ for routes called without the slash.
+        redirect: "follow",
+    });
+}
 
-    if (req.method !== "GET" && req.method !== "HEAD") {
-        init.body = await req.text();
+async function forward(req: NextRequest, path: string[]): Promise<NextResponse> {
+    // Read the body once — a stream can't be replayed for the retry after refresh.
+    const body = req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer();
+    const refreshToken = await getRefreshToken();
+    let accessToken = await getAccessToken();
+
+    // The access cookie expired but the session is still alive: refresh up front.
+    if (!accessToken && refreshToken) {
+        accessToken = (await refreshAccessToken(refreshToken)) ?? undefined;
+        if (accessToken) await setSessionCookies(accessToken);
     }
 
-    const flaskRes = await fetch(target, init);
-
-    if (flaskRes.status === 401 && retry) {
-        const refreshToken = await getRefreshToken();
-        if (refreshToken) {
-            const refreshRes = await fetch(`${FLASK_URL}/auth/refresh`, {
-                method: "POST",
-                headers: { Authorization: `Bearer ${refreshToken}` },
-            });
-            if (refreshRes.ok) {
-                const data = await refreshRes.json();
-                await setSessionCookies(data.access_token);
-                return forward(req, path, false); // retry exactly once
+    let flaskRes: Response;
+    try {
+        flaskRes = await callFlask(req, path, body, accessToken);
+        if (flaskRes.status === 401 && refreshToken) {
+            const fresh = await refreshAccessToken(refreshToken);
+            if (fresh) {
+                await setSessionCookies(fresh);
+                flaskRes = await callFlask(req, path, body, fresh); // retry exactly once
             }
         }
-        await clearSessionCookies();
+    } catch {
+        return NextResponse.json({ error: "The MySchedule API is unreachable." }, { status: 502 });
     }
 
-    const data = await flaskRes.json().catch(() => null);
-    return NextResponse.json(data, { status: flaskRes.status });
+    if (flaskRes.status === 401) await clearSessionCookies();
+
+    const headers = new Headers();
+    for (const name of PASS_RESPONSE_HEADERS) {
+        const value = flaskRes.headers.get(name);
+        if (value) headers.set(name, value);
+    }
+
+    // 204/304 must not carry a body; everything else (JSON, text, files) streams through unchanged.
+    const noBody = flaskRes.status === 204 || flaskRes.status === 304 || req.method === "HEAD";
+    return new NextResponse(noBody ? null : flaskRes.body, { status: flaskRes.status, headers });
 }
 
-export async function GET(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+type Ctx = { params: Promise<{ path: string[] }> };
+
+export async function GET(req: NextRequest, { params }: Ctx) {
     return forward(req, (await params).path);
 }
-export async function POST(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+export async function POST(req: NextRequest, { params }: Ctx) {
     return forward(req, (await params).path);
 }
-export async function PATCH(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+export async function PATCH(req: NextRequest, { params }: Ctx) {
     return forward(req, (await params).path);
 }
-export async function PUT(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+export async function PUT(req: NextRequest, { params }: Ctx) {
     return forward(req, (await params).path);
 }
-export async function DELETE(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+export async function DELETE(req: NextRequest, { params }: Ctx) {
     return forward(req, (await params).path);
 }
