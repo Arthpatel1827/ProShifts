@@ -162,6 +162,11 @@ class TimeEntryController:
         if not location_id:
             return jsonify({"error": "location_id required"}), 400
 
+        # Only people who work at this location may see who is on shift there.
+        from services.rbac_service import location_employment
+        if not location_employment(user_id, location_id):
+            return jsonify({"error": "Forbidden"}), 403
+
         now   = datetime.now(timezone.utc)
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end   = start + timedelta(days=1)

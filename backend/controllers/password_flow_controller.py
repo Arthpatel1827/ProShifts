@@ -124,9 +124,10 @@ class PasswordFlowController:
 
         user_id = consume_reset_token(raw_otp)
         if not user_id:
-            # Neutral response (don’t leak whether the code was valid)
-            return (html_response("Reset password", "If the code is valid, the password has been updated.")
-                    if request.form else jsonify({"message": "If the code is valid, the password has been updated."}), 200)
+            # A wrong 6-digit code reveals nothing about which emails exist, so say so plainly —
+            # a 200 here made the app show "Password changed" when nothing had changed.
+            return (html_response("Reset password", "That code is invalid or has expired.", 400)
+                    if request.form else jsonify({"error": "That code is invalid or has expired. Request a new one."}), 400)
 
         try:
             # Keep your existing method name

@@ -88,9 +88,17 @@ class MessagingService:
 
     # ── DM ────────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _companies(user_id: int) -> set:
+        return {
+            e.comp_id for e in Employment.query.filter_by(user_id=user_id, status="active").all()
+        }
+
     def get_or_create_dm(self, user_id_a: int, user_id_b: int) -> Channel:
         if user_id_a == user_id_b:
             raise ValueError("Cannot DM yourself.")
+        if not self._companies(user_id_a) & self._companies(user_id_b):
+            raise PermissionError("You can only message people at your company.")
 
         candidates = (
             db.session.query(Channel)
@@ -139,10 +147,22 @@ class MessagingService:
             is_broadcast=is_broadcast,
             description=description,
         )
+        # Members must be colleagues at the creator's company.
+        comps = self._companies(creator_id)
+        allowed = {
+            e.user_id for e in Employment.query.filter(
+                Employment.user_id.in_(set(member_ids) or {0}),
+                Employment.comp_id.in_(comps or {0}),
+                Employment.status == "active",
+            ).all()
+        }
+        if set(member_ids) - allowed:
+            raise PermissionError("Some of those people aren't at your company.")
+
         db.session.add(channel)
         db.session.flush()
 
-        all_members = set(member_ids) | {creator_id}
+        all_members = allowed | {creator_id}
         for uid in all_members:
             db.session.add(ChannelMember(
                 channel_id=channel.channel_id,
@@ -162,11 +182,17 @@ class MessagingService:
     def create_shift_thread(self, shift_id: int, creator_id: int) -> Channel:
         existing = Channel.query.filter_by(shift_id=shift_id, channel_type='shift').first()
         if existing:
+            if not ChannelMember.query.filter_by(channel_id=existing.channel_id, user_id=creator_id).first():
+                raise PermissionError("You're not part of this shift's thread.")
             return existing
 
         shift = Shift.query.get(shift_id)
         if not shift:
             raise ValueError("Shift not found.")
+        if not Employment.query.filter_by(
+            user_id=creator_id, location_id=shift.location_id, status="active"
+        ).first():
+            raise PermissionError("Not an employee at this shift's location.")
 
         name = f"Shift {shift.start_time.strftime('%b %d %I:%M %p')}"
         if shift.role:
@@ -302,6 +328,11 @@ class MessagingService:
     # ── Reactions ─────────────────────────────────────────────────────────────
 
     def toggle_reaction(self, message_id: int, user_id: int, emoji: str) -> bool:
+        msg = self._get_message(message_id)
+        if not ChannelMember.query.filter_by(channel_id=msg.channel_id, user_id=user_id).first():
+            raise PermissionError("Not a member of this channel.")
+        if len(emoji) > 16:
+            raise ValueError("Invalid reaction.")
         existing = MessageReaction.query.filter_by(
             message_id=message_id, user_id=user_id, emoji=emoji
         ).first()
@@ -332,6 +363,8 @@ class MessagingService:
             raise PermissionError("Only admins can add members.")
         if ChannelMember.query.filter_by(channel_id=channel_id, user_id=user_id).first():
             raise ValueError("User is already a member.")
+        if not self._companies(added_by) & self._companies(user_id):
+            raise PermissionError("You can only add people from your company.")
         db.session.add(ChannelMember(channel_id=channel_id, user_id=user_id))
         db.session.commit()
 
@@ -443,9 +476,23 @@ class MessagingService:
         sender_name = self._user_name(msg.sender_id)
         notified    = set()
 
+        # Only people in this channel can be mentioned. The old global username lookup
+        # (with ILIKE, where "_" is a wildcard) could notify users at other companies.
+        members = [m.user for m in channel.members if m.user]
+
+        def handles(u: AppUser) -> set:
+            names = {(u.username or "").lower(), (u.username or "").split("@")[0].lower()}
+            if u.display_name:
+                names.add(u.display_name.replace(" ", "").lower())
+                names.add(u.display_name.split()[0].lower())
+            return names - {""}
+
         for mention in mentions:
-            user = AppUser.query.filter(AppUser.username.ilike(mention)).first()
-            if user and user.user_id != msg.sender_id and user.user_id not in notified:
+            key = mention.lower()
+            matched = [u for u in members if key in handles(u)]
+            for user in matched:
+                if user.user_id == msg.sender_id or user.user_id in notified:
+                    continue
                 notified.add(user.user_id)
                 notif_svc.create(
                     user_id=user.user_id,
@@ -454,6 +501,7 @@ class MessagingService:
                     body=msg.content[:100],
                     data={"channel_id": msg.channel_id, "message_id": msg.message_id},
                 )
+            if matched:
                 continue
 
             if channel.location_id:
@@ -462,7 +510,10 @@ class MessagingService:
                     Role.name.ilike(mention),
                 ).first()
                 if role:
+                    member_ids = {u.user_id for u in members}
                     for emp in Employment.query.filter_by(role_id=role.role_id, status="active").all():
+                        if emp.user_id not in member_ids:
+                            continue
                         if emp.user_id != msg.sender_id and emp.user_id not in notified:
                             notified.add(emp.user_id)
                             notif_svc.create(

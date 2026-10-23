@@ -3,6 +3,7 @@ from flask import jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from extensions import db
 from models import AppUser, Employment, Location
+from services.rbac_service import APPROVER_ROLES, company_role_employment
 
 
 class AdminController:
@@ -143,10 +144,8 @@ class AdminController:
     # ── GET /admin/staff/<user_id>/profile ────────────────────────────────────
     def get_employee_profile(self, user_id: int):
         manager_id = int(get_jwt_identity())
-        mgr_emp    = Employment.query.filter_by(
-            user_id=manager_id, status="active"
-        ).first()
-        if not mgr_emp or mgr_emp.role.name.lower() not in ("owner", "manager"):
+        mgr_emp    = company_role_employment(manager_id, APPROVER_ROLES)
+        if not mgr_emp:
             return jsonify({"error": "Forbidden"}), 403
 
         emp = Employment.query.filter_by(
@@ -161,10 +160,8 @@ class AdminController:
     # ── PUT /admin/staff/<user_id>/profile ────────────────────────────────────
     def update_employee_profile(self, user_id: int):
         manager_id = int(get_jwt_identity())
-        mgr_emp    = Employment.query.filter_by(
-            user_id=manager_id, status="active"
-        ).first()
-        if not mgr_emp or mgr_emp.role.name.lower() not in ("owner", "manager"):
+        mgr_emp    = company_role_employment(manager_id, APPROVER_ROLES)
+        if not mgr_emp:
             return jsonify({"error": "Forbidden"}), 403
 
         emp = Employment.query.filter_by(
@@ -174,7 +171,15 @@ class AdminController:
         if not emp:
             return jsonify({"error": "Employee not found"}), 404
 
+        target_role = (emp.role.name if emp.role else "").lower()
+        caller_role = mgr_emp.role.name.lower()
+        if target_role == "owner" and caller_role != "owner":
+            return jsonify({"error": "Only an owner can change an owner's profile"}), 403
+
         data = request.get_json(silent=True) or {}
+
+        if data.get("status") == "inactive" and user_id == manager_id:
+            return jsonify({"error": "You can't deactivate your own account"}), 400
 
         if "hourly_rate" in data:
             try:
@@ -223,9 +228,10 @@ class AdminController:
     def update_location(self, loc_id: int):
         try:
             user_id = int(get_jwt_identity())
-            emp = Employment.query.filter_by(user_id=user_id, status="active").first()
+            # Editing a location's address/geofence is an owner/manager action.
+            emp = company_role_employment(user_id, APPROVER_ROLES)
             if not emp:
-                return jsonify({"error": "Not found"}), 404
+                return jsonify({"error": "Forbidden"}), 403
 
             location = Location.query.filter_by(
                 loc_id=loc_id, comp_id=emp.comp_id

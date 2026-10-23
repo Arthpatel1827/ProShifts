@@ -121,6 +121,8 @@ class ShiftService:
         if not shift:
             raise ValueError("Shift not found")
         self._assert_manager(caller_user_id, shift.location_id)
+        if shift.status == "cancelled":
+            raise ValueError("Cannot assign staff to a cancelled shift")
         emp = Employment.query.filter_by(
             user_id=user_id, location_id=shift.location_id, status="active"
         ).first()
@@ -128,6 +130,17 @@ class ShiftService:
             raise ValueError("User is not an active employee at this location")
         if ShiftAssignment.query.filter_by(shift_id=shift_id, user_id=user_id).first():
             raise ValueError("User is already assigned to this shift")
+        # Same conflict rules as bulk_create_week.
+        if self._has_overlap(user_id, shift.start_time, shift.end_time):
+            raise ValueError("This employee already has a shift that overlaps this time")
+        day = shift.start_time.date()
+        time_off = self._approved_timeoff_map(
+            shift.location_id,
+            datetime.combine(day, datetime.min.time()),
+            datetime.combine(day, datetime.min.time()) + timedelta(days=1),
+        )
+        if self._is_on_timeoff(time_off, user_id, day):
+            raise ValueError("This employee has approved time off on this day")
         assignment = ShiftAssignment(
             shift_id=shift_id, user_id=user_id, assigned_by=caller_user_id
         )
@@ -386,19 +399,34 @@ class ShiftService:
             Shift.start_time >= ws,
             Shift.start_time < we,
         ).all()
-        total_minutes = 0
+        # Cost each assignment at that employee's own rate. Unassigned shifts and
+        # employees without a rate fall back to `hourly_rate` so the estimate isn't zero.
+        rates = {
+            e.user_id: float(e.hourly_rate)
+            for e in Employment.query.filter_by(location_id=location_id, status="active").all()
+            if e.hourly_rate is not None
+        }
+        total_minutes = 0.0
+        total_cost    = 0.0
+        unassigned_minutes = 0.0
         for shift in shifts:
             duration = (shift.end_time - shift.start_time).total_seconds() / 60
-            total_minutes += max(duration - shift.break_minutes, 0)
-        total_hours = total_minutes / 60
-        total_cost  = total_hours * hourly_rate
+            paid = max(duration - (shift.break_minutes or 0), 0)
+            total_minutes += paid
+            if shift.assignments:
+                for a in shift.assignments:
+                    total_cost += paid / 60 * rates.get(a.user_id, hourly_rate)
+            else:
+                unassigned_minutes += paid
+                total_cost += paid / 60 * hourly_rate
         return {
-            "location_id":  location_id,
-            "week_start":   week_start,
-            "total_shifts": len(shifts),
-            "total_hours":  round(total_hours, 2),
-            "total_cost":   round(total_cost, 2),
-            "hourly_rate":  hourly_rate,
+            "location_id":      location_id,
+            "week_start":       week_start,
+            "total_shifts":     len(shifts),
+            "total_hours":      round(total_minutes / 60, 2),
+            "total_cost":       round(total_cost, 2),
+            "hourly_rate":      hourly_rate,
+            "unassigned_hours": round(unassigned_minutes / 60, 2),
         }
 
     # ── Serialize ─────────────────────────────────────────────────────────────
