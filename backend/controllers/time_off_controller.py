@@ -1,5 +1,6 @@
 # controllers/time_off_controller.py
 from datetime import date
+from services.rbac_service import MANAGER_ROLES, company_role_employment
 from flask import jsonify, request
 from flask_jwt_extended import get_jwt_identity
 from services.time_off_service import TimeOffService
@@ -57,9 +58,10 @@ class TimeOffController:
     def pending(self):
         try:
             manager_id = int(get_jwt_identity())
-            emp = Employment.query.filter_by(user_id=manager_id, status="active").first()
+            # Time off is company-wide, so the caller must manage somewhere in the company.
+            emp = company_role_employment(manager_id, MANAGER_ROLES)
             if not emp:
-                return jsonify({"error": "Not found"}), 404
+                return jsonify({"error": "Forbidden"}), 403
             requests = svc.get_pending_for_manager(emp.comp_id)
             return jsonify({"requests": [svc.serialize(r) for r in requests]}), 200
         except Exception:
@@ -78,7 +80,9 @@ class TimeOffController:
                 manager_notes=manager_notes,
             )
             return jsonify({"message": "Decision recorded", "request": svc.serialize(req)}), 200
-        except (ValueError, PermissionError) as e:
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
+        except ValueError as e:
             return jsonify({"error": str(e)}), 400
         except Exception:
             return jsonify({"error": "Something went wrong"}), 500

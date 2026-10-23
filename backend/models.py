@@ -242,7 +242,7 @@ class Notification(db.Model):
     __tablename__ = "notification"
 
     notif_id   = db.Column(BigInteger, primary_key=True)
-    user_id    = db.Column(BigInteger, db.ForeignKey("app_user.user_id", ondelete="CASCADE"), nullable=False)
+    user_id    = db.Column(BigInteger, db.ForeignKey("app_user.user_id", ondelete="CASCADE"), nullable=False, index=True)
     notif_type = db.Column(Text, nullable=False)
     title      = db.Column(Text, nullable=False)
     body       = db.Column(Text, nullable=False)
@@ -259,7 +259,7 @@ class TimeEntry(db.Model):
     __tablename__ = "time_entry"
 
     entry_id      = db.Column(BigInteger, primary_key=True)
-    user_id       = db.Column(BigInteger, db.ForeignKey("app_user.user_id", ondelete="CASCADE"), nullable=False)
+    user_id       = db.Column(BigInteger, db.ForeignKey("app_user.user_id", ondelete="CASCADE"), nullable=False, index=True)
     shift_id      = db.Column(BigInteger, db.ForeignKey("shift.shift_id",   ondelete="SET NULL"), nullable=True)
     clock_in      = db.Column(DateTime(timezone=True), nullable=False)
     clock_out     = db.Column(DateTime(timezone=True), nullable=True)

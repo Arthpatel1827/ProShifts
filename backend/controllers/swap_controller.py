@@ -1,4 +1,5 @@
 # controllers/swap_controller.py
+from services.rbac_service import require_location_role
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from services.swap_service import SwapService
@@ -224,6 +225,10 @@ class SwapController:
             location_id = request.args.get("location_id", type=int)
             if not location_id:
                 return jsonify({"error": "location_id required"}), 400
+            try:
+                require_location_role(int(get_jwt_identity()), location_id)
+            except PermissionError as e:
+                return jsonify({"error": str(e)}), 403
             swaps = svc.get_pending_manager(location_id)
             return jsonify({
                 "swaps": [svc.serialize(s, include_conflicts=True) for s in swaps]
@@ -243,7 +248,9 @@ class SwapController:
                 "swap":      svc.serialize(result["swap"]),
                 "conflicts": result["conflicts"],
             }), 200
-        except (ValueError, PermissionError) as e:
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
+        except ValueError as e:
             return jsonify({"error": str(e)}), 400
         except Exception as e:
             import traceback; traceback.print_exc()

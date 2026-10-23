@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { setSessionCookies } from "@/lib/auth/session";
 
-const FLASK_URL = process.env.FLASK_API_URL ?? "http://localhost:5000";
+import { FLASK_URL } from "@/lib/auth/refresh";
 
 export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => null);
@@ -9,11 +9,17 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "email and password are required" }, { status: 400 });
     }
 
-    const flaskRes = await fetch(`${FLASK_URL}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-    });
+    let flaskRes: Response;
+    try {
+        flaskRes = await fetch(`${FLASK_URL}/auth/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: body.email, password: body.password }),
+            cache: "no-store",
+        });
+    } catch {
+        return NextResponse.json({ error: "The MySchedule API is unreachable. Try again shortly." }, { status: 502 });
+    }
 
     const data = await flaskRes.json().catch(() => ({}));
 

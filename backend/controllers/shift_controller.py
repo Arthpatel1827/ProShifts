@@ -3,6 +3,7 @@ from datetime import datetime
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from services.shift_service import ShiftService
+from services.rbac_service import require_location_role
 
 svc = ShiftService()
 
@@ -164,7 +165,9 @@ class ShiftController:
         try:
             svc.unassign_user(shift_id=shift_id, user_id=user_id, caller_user_id=caller_id)
             return jsonify({"message": "User unassigned"}), 200
-        except (PermissionError, ValueError) as e:
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
+        except ValueError as e:
             return jsonify({"error": str(e)}), 400
 
     def publish_week(self):
@@ -190,6 +193,13 @@ class ShiftController:
         hourly_rate = request.args.get("hourly_rate", default=15.0, type=float)
         if not location_id or not week_start:
             return jsonify({"error": "location_id and week_start are required"}), 400
-        result = svc.get_labor_cost(location_id=location_id,
-                                    week_start=week_start, hourly_rate=hourly_rate)
+        try:
+            # Labor cost exposes pay data — managers at *this* location only.
+            require_location_role(caller_id, location_id)
+            result = svc.get_labor_cost(location_id=location_id,
+                                        week_start=week_start, hourly_rate=hourly_rate)
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
+        except ValueError:
+            return jsonify({"error": "week_start must be YYYY-MM-DD"}), 400
         return jsonify(result), 200

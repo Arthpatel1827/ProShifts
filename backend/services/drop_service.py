@@ -94,10 +94,15 @@ class DropService:
     @staticmethod
     def serialize(drop: ShiftDrop) -> dict:
         shift = Shift.query.get(drop.shift_id)
+        employee = AppUser.query.get(drop.user_id)
         return {
             "drop_id":    drop.drop_id,
             "shift_id":   drop.shift_id,
             "user_id":    drop.user_id,
+            "employee":   {
+                "user_id": drop.user_id,
+                "name":    (employee.display_name or employee.username) if employee else None,
+            },
             "reason":     drop.reason,
             "status":     drop.status,
             "created_at": drop.created_at.isoformat(),

@@ -207,6 +207,10 @@ class MessagingController:
             except Exception:
                 pass
             return jsonify({"added": added, "emoji": emoji}), 200
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
         except Exception:
             import traceback; traceback.print_exc()
             return jsonify({"error": "Something went wrong"}), 500

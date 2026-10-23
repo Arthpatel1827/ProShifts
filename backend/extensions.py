@@ -40,7 +40,22 @@ def init_extensions(app):
     mail.init_app(app)
     bcrypt.init_app(app)
     limiter.init_app(app)
-    socketio.init_app(app, message_queue=app.config.get("SOCKETIO_MESSAGE_QUEUE"))
+    import os
+    from urllib.parse import urlparse
+    origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
+
+    def socket_origin_allowed(origin, environ):
+        # Browsers: only the configured web origins. Native clients (React Native on
+        # Android sends the API's own URL as Origin) are same-host, so allow those too.
+        if origins == ["*"] or origin in origins:
+            return True
+        return urlparse(origin).netloc == environ.get("HTTP_HOST")
+
+    socketio.init_app(
+        app,
+        message_queue=app.config.get("SOCKETIO_MESSAGE_QUEUE"),
+        cors_allowed_origins=socket_origin_allowed,
+    )
 
     redis_client = redis_lib.from_url(
         app.config.get("REDIS_URL", "redis://localhost:6379/0"),

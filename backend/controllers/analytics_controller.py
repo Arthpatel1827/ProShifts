@@ -4,15 +4,16 @@ from flask_jwt_extended import get_jwt_identity
 from models             import Employment, Shift, TimeEntry
 from datetime           import datetime, timezone, timedelta
 from collections        import defaultdict
+from services.rbac_service import require_location_role
 
 
 class AnalyticsController:
 
-    def _check_permission(self, manager_id: int):
-        emp = Employment.query.filter_by(
-            user_id=manager_id, status='active'
-        ).first()
-        if not emp or emp.role.name.lower() not in ('owner', 'manager', 'supervisor'):
+    def _check_permission(self, manager_id: int, location_id: int):
+        # Must be a manager at the *requested* location, not just somewhere.
+        try:
+            emp = require_location_role(manager_id, location_id)
+        except PermissionError:
             return None, jsonify({'error': 'Forbidden'}), 403
         return emp, None, None
 
@@ -25,7 +26,7 @@ class AnalyticsController:
         if not location_id:
             return jsonify({'error': 'location_id required'}), 400
 
-        emp, err_resp, err_code = self._check_permission(manager_id)
+        emp, err_resp, err_code = self._check_permission(manager_id, location_id)
         if err_resp:
             return err_resp, err_code
 

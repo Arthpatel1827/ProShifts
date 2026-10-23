@@ -27,6 +27,15 @@ class OnboardingService:
 
         user = AppUser.query.filter_by(user_email=normalized_email).first()
         if user:
+            # Never reset the password of an account that belongs to another company —
+            # any manager could otherwise lock out (or hijack the onboarding of) a stranger.
+            other_company = any(
+                e.comp_id != company.comp_id for e in user.employments
+            )
+            if other_company:
+                raise ValueError(
+                    "This email already has a MySchedule account with another company."
+                )
             user.user_password = password_hash
             if not user.is_verified:
                 user.is_verified = True

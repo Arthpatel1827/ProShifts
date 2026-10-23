@@ -182,14 +182,12 @@ class AuthController:
         Minimal identity endpoint. If you want user details, uncomment the lines
         to fetch/serialize the user from AuthService.
         """
-        user_id = get_jwt_identity()
-
-        # Optional: return full user object if your AuthService provides it
-        # user = self.auth_service.get_user_by_id(int(user_id))
-        # if user:
-        #     return jsonify({"user": self.auth_service.serialize_user(user)}), 200
-
-        return jsonify({"user_id": int(user_id)}), 200
+        user_id = int(get_jwt_identity())
+        user = self.auth_service.get_user_by_id(user_id)
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+        # user_id stays at the top level for existing clients.
+        return jsonify({"user_id": user_id, "user": self.auth_service.serialize_user(user)}), 200
 
     # -------- Verify Email (from email button) --------
     def verify_email(self):

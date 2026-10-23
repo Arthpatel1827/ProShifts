@@ -1,19 +1,23 @@
-import React, { useContext, useState } from 'react';
+import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
-import { AuthContext } from '../context/AuthContext';
+import { AuthAPI } from '../api/api';
 
 export default function ForgotPasswordRequestScreen({ navigation }: any) {
-    const { forgotPassword } = useContext(AuthContext);
     const [email, setEmail] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
 
     const handleSubmit = async () => {
+        const trimmed = email.trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+            setError('Enter a valid email address.');
+            return;
+        }
         setLoading(true);
         setError('');
         try {
-            await forgotPassword(email);
-            navigation.navigate('Otp', { email });
+            await AuthAPI.forgotPassword(trimmed);
+            navigation.navigate('Otp', { email: trimmed });
         } catch (e: any) {
             setError(e?.response?.data?.error || 'Failed to send reset link');
         } finally {
@@ -31,7 +35,7 @@ export default function ForgotPasswordRequestScreen({ navigation }: any) {
 
             {error ? <Text style={styles.error}>{error}</Text> : null}
 
-            <TouchableOpacity style={styles.button} onPress={handleSubmit}>
+            <TouchableOpacity style={styles.button} onPress={handleSubmit} disabled={loading}>
                 {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Send Code</Text>}
             </TouchableOpacity>
         </View>

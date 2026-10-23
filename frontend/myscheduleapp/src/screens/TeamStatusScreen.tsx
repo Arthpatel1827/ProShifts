@@ -14,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { TimeEntryAPI, AdminAPI } from '../api/api';
 import { AuthContext } from '../context/AuthContext';
+import ShiftRing from '../components/home/ShiftRing';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -147,6 +148,7 @@ export default function TeamStatusScreen({ route, navigation }: any) {
     };
 
     const filtered = filter ? team.filter(m => m.status === filter) : team;
+    const onShift  = counts.working + counts.on_break;
 
     // ── Render member ─────────────────────────────────────────────────────────
     const renderMember = ({ item }: { item: TeamMemberStatus }) => {
@@ -243,8 +245,20 @@ export default function TeamStatusScreen({ route, navigation }: any) {
                 </View>
             </View>
 
-            {/* Summary counts */}
+            {/* Coverage ring + summary counts */}
             <View style={styles.summaryBar}>
+                {team.length > 0 && (
+                    <ShiftRing
+                        size={112}
+                        strokeWidth={10}
+                        tone={counts.late > 0 ? 'danger' : 'success'}
+                        progress={onShift / team.length}
+                        icon={counts.late > 0 ? 'alert-circle-outline' : 'people-outline'}
+                        label={counts.late > 0 ? `${counts.late} late` : 'on shift'}
+                        primaryText={`${onShift}/${team.length}`}
+                    />
+                )}
+                <View style={styles.summaryGrid}>
                 {[
                     { color: '#10B981', label: 'Working',   count: counts.working },
                     { color: '#F59E0B', label: 'On break',  count: counts.on_break },
@@ -266,6 +280,7 @@ export default function TeamStatusScreen({ route, navigation }: any) {
                         <Text style={styles.summaryLabel}>{item.label}</Text>
                     </Pressable>
                 ))}
+                </View>
             </View>
 
             {/* Filter pills */}
@@ -425,13 +440,16 @@ const styles = StyleSheet.create({
 
     summaryBar: {
         flexDirection: 'row',
-        justifyContent: 'space-around',
+        alignItems: 'center',
+        gap: 16,
         paddingVertical: 14,
+        paddingHorizontal: 20,
         backgroundColor: '#fff',
         borderBottomWidth: 1,
         borderBottomColor: '#F0F0F0',
     },
-    summaryItem:  { alignItems: 'center', gap: 2 },
+    summaryGrid:  { flex: 1, flexDirection: 'row', flexWrap: 'wrap', rowGap: 10 },
+    summaryItem:  { width: '50%', alignItems: 'center', gap: 2 },
     summaryCount: { fontSize: 22, fontWeight: '800' },
     summaryLabel: { fontSize: 11, color: colors.gray },
 

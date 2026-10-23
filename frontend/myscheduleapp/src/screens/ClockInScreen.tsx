@@ -19,6 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons }     from '@expo/vector-icons';
 import * as Location    from 'expo-location';
 import { colors }       from '../theme/colors';
+import ShiftRing from '../components/home/ShiftRing';
 import { TimeEntryAPI } from '../api/api';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -83,6 +84,13 @@ function formatTime(iso: string): string {
         minute: '2-digit',
         hour12: true,
     });
+}
+
+/** 0–1 share of the scheduled shift elapsed by `minutes` worked. */
+function shiftProgress(shift: TodayShift | null, minutes: number): number {
+    if (!shift) return 0;
+    const total = (new Date(shift.end_time).getTime() - new Date(shift.start_time).getTime()) / 60000;
+    return total > 0 ? Math.min(Math.max(minutes / total, 0), 1) : 0;
 }
 
 function formatShiftTime(iso: string): string {
@@ -416,43 +424,46 @@ export default function ClockInScreen({ navigation }: any) {
                             </View>
                         )}
 
-                        {/* Clock In button */}
-                        <Pressable
-                            style={[styles.clockInBtn, submitting && { opacity: 0.6 }]}
-                            onPress={handleClockIn}
-                            disabled={submitting}
-                        >
-                            {submitting ? (
-                                <ActivityIndicator color="#fff" size="large" />
-                            ) : (
-                                <>
-                                    <Ionicons name="log-in-outline" size={28} color="#fff" />
-                                    <Text style={styles.clockInBtnText}>Clock In</Text>
-                                    <Text style={styles.clockInBtnSub}>
-                                        {new Date().toLocaleTimeString('en-CA', {
-                                            hour:   '2-digit',
-                                            minute: '2-digit',
-                                            hour12: true,
-                                        })}
-                                    </Text>
-                                </>
-                            )}
-                        </Pressable>
+                        {/* Clock In — the same ring as the Home card, full size */}
+                        <View style={styles.ringWrap}>
+                            <ShiftRing
+                                tone="primary"
+                                progress={0}
+                                pulsing={!submitting}
+                                icon="log-in-outline"
+                                label="ready to clock in"
+                                primaryText={new Date().toLocaleTimeString('en-CA', {
+                                    hour:   'numeric',
+                                    minute: '2-digit',
+                                    hour12: true,
+                                })}
+                                secondaryText={todayShift
+                                    ? `shift ${formatShiftTime(todayShift.start_time)} – ${formatShiftTime(todayShift.end_time)}`
+                                    : 'no shift scheduled'}
+                                actionLabel={submitting ? 'Clocking in…' : 'Clock In'}
+                                actionIcon="log-in-outline"
+                                onAction={handleClockIn}
+                                actionDisabled={submitting}
+                            />
+                        </View>
                     </>
                 )}
 
                 {/* ── WORKING — clocked in ── */}
                 {clockState === 'working' && activeEntry && (
                     <>
-                        {/* Live timer */}
+                        {/* Live timer — ring fills as the scheduled shift elapses */}
                         <View style={styles.timerCard}>
-                            <Text style={styles.timerLabel}>TIME WORKED</Text>
-                            <Text style={styles.timerValue}>
-                                {formatDuration(liveMinutes)}
-                            </Text>
-                            <Text style={styles.timerSince}>
-                                Clocked in at {formatTime(activeEntry.clock_in)}
-                            </Text>
+                            <ShiftRing
+                                tone="success"
+                                progress={shiftProgress(todayShift, liveMinutes)}
+                                icon="checkmark-circle-outline"
+                                label="on shift"
+                                primaryText={formatDuration(liveMinutes)}
+                                secondaryText={todayShift
+                                    ? `in ${formatTime(activeEntry.clock_in)} · ends ${formatShiftTime(todayShift.end_time)}`
+                                    : `clocked in at ${formatTime(activeEntry.clock_in)}`}
+                            />
 
                             {/* Break count */}
                             {activeEntry.break_count > 0 && (
@@ -510,15 +521,15 @@ export default function ClockInScreen({ navigation }: any) {
                 {clockState === 'on_break' && activeEntry && (
                     <>
                         <View style={[styles.timerCard, styles.timerCardBreak]}>
-                            <View style={styles.breakIconRow}>
-                                <Ionicons name="cafe-outline" size={32} color={colors.warning} />
-                            </View>
-                            <Text style={[styles.timerLabel, { color: colors.warning }]}>
-                                ON BREAK
-                            </Text>
-                            <Text style={[styles.timerValue, { color: colors.warning }]}>
-                                {formatDuration(breakMinutes)}
-                            </Text>
+                            {/* Ring fills toward the scheduled break length; turns red once over */}
+                            <ShiftRing
+                                tone={settings && breakMinutes > settings.break_duration_mins ? 'danger' : 'warning'}
+                                progress={settings ? breakMinutes / Math.max(settings.break_duration_mins, 1) : 0}
+                                icon="cafe-outline"
+                                label={settings && breakMinutes > settings.break_duration_mins ? 'on break · overdue' : 'on break'}
+                                primaryText={formatDuration(breakMinutes)}
+                                secondaryText={settings ? `of ${settings.break_duration_mins}m break` : undefined}
+                            />
 
                             {/* Break duration reminder */}
                             {settings && (
@@ -575,6 +586,7 @@ const styles = StyleSheet.create({
     safe:    { flex: 1, backgroundColor: '#F8F8FC' },
     scroll:  { flex: 1 },
     content: { padding: 20, paddingBottom: 60 },
+    ringWrap: { alignItems: 'stretch', marginTop: 8, marginBottom: 8, paddingHorizontal: 12 },
 
     header: {
         flexDirection:     'row',
@@ -687,21 +699,6 @@ const styles = StyleSheet.create({
     pinHint: { fontSize: 12, color: colors.gray, textAlign: 'center' },
 
     // Clock in button
-    clockInBtn: {
-        alignItems:      'center',
-        justifyContent:  'center',
-        backgroundColor: colors.success,
-        borderRadius:    24,
-        paddingVertical: 32,
-        marginTop:       8,
-        gap:             6,
-        shadowColor:     colors.success,
-        shadowOpacity:   0.3,
-        shadowRadius:    12,
-        elevation:       6,
-    },
-    clockInBtnText: { color: '#fff', fontSize: 22, fontWeight: '800' },
-    clockInBtnSub:  { color: 'rgba(255,255,255,0.8)', fontSize: 14 },
 
     // Timer card
     timerCard: {
@@ -722,8 +719,6 @@ const styles = StyleSheet.create({
         borderColor: colors.warning + '40',
         backgroundColor: colors.warning + '08',
     },
-    timerLabel:    { fontSize: 11, fontWeight: '800', color: colors.gray, letterSpacing: 1.5 },
-    timerValue:    { fontSize: 52, fontWeight: '800', color: colors.text, letterSpacing: -2 },
     timerSince:    { fontSize: 13, color: colors.gray },
     breakBadge: {
         flexDirection:   'row',
@@ -736,7 +731,6 @@ const styles = StyleSheet.create({
     },
     breakBadgeText: { fontSize: 12, color: colors.gray },
 
-    breakIconRow: { marginBottom: 4 },
     breakDurationRow: { alignItems: 'center', gap: 2 },
     breakDurationText: { fontSize: 13, color: colors.gray },
     breakOverText:     { fontSize: 12, color: colors.error, fontWeight: '700' },

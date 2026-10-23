@@ -2,7 +2,8 @@
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from services.onboarding_service import OnboardingService
-from models import Employment, Location
+from models import Employment, Location, OnboardingInvite
+from services.rbac_service import APPROVER_ROLES, require_location_role
 
 
 class OnboardingController:
@@ -27,26 +28,25 @@ class OnboardingController:
         except (TypeError, ValueError):
             return jsonify({"error": "Unauthorized"}), 401
 
-        # All active employments for caller
-        active_emps = (
-            Employment.query
-            .filter_by(user_id=caller_id, status="active")
-            .all()
-        )
-        if not active_emps:
-            return jsonify({"error": "not authorized to invite"}), 403
-
-        # Only owner / manager / admin can invite
-        admin_emps = [
-            e for e in active_emps
-            if (e.position or "").strip().lower() in ("owner", "manager", "admin")
-        ]
-        if not admin_emps:
-            return jsonify({"error": "not authorized to invite"}), 403
-
-        # Assume single company for now: take company from first admin employment
-        admin_emp = admin_emps[0]
+        # Employment.position was replaced by role_id (migration 707f52f0a927); reading it
+        # raised AttributeError. Mirror the GraphQL resolver: owner/manager at this location.
+        try:
+            location_id = int(location_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "location_id must be a number"}), 400
+        try:
+            admin_emp = require_location_role(caller_id, location_id, APPROVER_ROLES)
+        except PermissionError:
+            return jsonify({"error": "Only an owner or manager at this location can invite staff"}), 403
         comp_id = admin_emp.comp_id
+
+        if position.lower() == "owner" and admin_emp.role.name.lower() != "owner":
+            return jsonify({"error": "Only an owner can invite another owner"}), 403
+        if len(position) > 50:
+            return jsonify({"error": "Role name is too long"}), 400
+
+        if OnboardingInvite.query.filter_by(email=email, location_id=location_id, status="sent").first():
+            return jsonify({"error": "An invite has already been sent to this email"}), 400
 
         # Ensure the chosen location belongs to this company
         location = (

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getRefreshToken, clearSessionCookies } from "@/lib/auth/session";
 
-const FLASK_URL = process.env.FLASK_API_URL ?? "http://localhost:5000";
+import { FLASK_URL } from "@/lib/auth/refresh";
 
 export async function POST() {
     const refreshToken = await getRefreshToken();

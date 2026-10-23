@@ -107,9 +107,14 @@ class TimeOffService:
     @staticmethod
     def serialize(req: TimeOffRequest) -> dict:
         days = (req.end_date - req.start_date).days + 1
+        employee = AppUser.query.get(req.user_id)
         return {
             "request_id":    req.request_id,
             "user_id":       req.user_id,
+            "employee":      {
+                "user_id": req.user_id,
+                "name":    (employee.display_name or employee.username) if employee else None,
+            },
             "start_date":    req.start_date.isoformat(),
             "end_date":      req.end_date.isoformat(),
             "days":          days,

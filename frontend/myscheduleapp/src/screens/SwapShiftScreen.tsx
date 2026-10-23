@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { ShiftsAPI, SwapsAPI, DropsAPI, AdminAPI } from '../api/api';
 import { AuthContext } from '../context/AuthContext';
+import ShiftRing from '../components/home/ShiftRing';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -278,6 +279,15 @@ export default function SwapShiftScreen({ navigation }: any) {
             ? !!myShift && !!targetMember && !!theirShift
             : !!myShift;
 
+    // Progress through the request for the ring: shift → (colleague → their shift).
+    const stepsTotal = tab === 'targeted' ? 3 : 1;
+    const stepsDone  = tab === 'targeted'
+        ? [myShift, targetMember, theirShift].filter(Boolean).length
+        : myShift ? 1 : 0;
+    const ringLabel = canSubmit
+        ? 'ready to send'
+        : `step ${Math.min(stepsDone + 1, stepsTotal)} of ${stepsTotal}`;
+
     // ── Render ────────────────────────────────────────────────────────────────
     return (
         <SafeAreaView style={styles.safe}>
@@ -340,6 +350,20 @@ export default function SwapShiftScreen({ navigation }: any) {
                                 ? 'Pick a specific colleague and the shift you want from them. Both parties and the manager must agree.'
                                 : 'Hand your shift back to your manager. They will need to approve and reassign it.'}
                     </Text>
+                </View>
+
+                {/* Request progress */}
+                <View style={styles.ringRow}>
+                    <ShiftRing
+                        size={132}
+                        strokeWidth={11}
+                        tone={tab === 'drop' ? 'danger' : canSubmit ? 'success' : 'primary'}
+                        progress={stepsDone / stepsTotal}
+                        icon={tab === 'drop' ? 'exit-outline' : 'swap-horizontal'}
+                        label={ringLabel}
+                        primaryText={myShift ? fmtDate(myShift.start_time) : 'pick a shift'}
+                        secondaryText={myShift ? `${fmtTime(myShift.start_time)} – ${fmtTime(myShift.end_time)}` : undefined}
+                    />
                 </View>
 
                 {/* Step 1 — My shift */}
@@ -595,6 +619,7 @@ const styles = StyleSheet.create({
         padding: 12, borderRadius: 10, borderWidth: 1, marginBottom: 16,
     },
     bannerText: { flex: 1, fontSize: 12, lineHeight: 18 },
+    ringRow:    { alignItems: 'center', marginBottom: 20 },
 
     stepRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 },
     stepBadge: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },

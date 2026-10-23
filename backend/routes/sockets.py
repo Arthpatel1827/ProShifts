@@ -1,8 +1,14 @@
 # routes/sockets.py
+from flask import session
 from flask_socketio import join_room, leave_room, emit
 from flask_jwt_extended import decode_token
 from extensions import socketio
-from models import AppUser
+from models import AppUser, ChannelMember, Employment
+
+
+def _socket_user_id():
+    # Flask-SocketIO keeps `session` per connection; set once the handshake is verified.
+    return session.get("socket_user_id")
 
 
 def register_socket_handlers():
@@ -19,18 +25,28 @@ def register_socket_handlers():
                 return False
         except Exception:
             return False
+        session["socket_user_id"] = user_id
         join_room(f"user:{user_id}")
         emit("connected", {"message": "Connected to real-time updates", "user_id": user_id})
         return True
 
     @socketio.on("join")
     def handle_join(data):
+        # Rooms carry schedule and labor-cost events, so only members may join them.
+        user_id     = _socket_user_id()
+        data        = data or {}
         location_id = data.get("location_id")
         company_id  = data.get("company_id")
-        if location_id:
+        if not user_id:
+            return
+        if location_id and Employment.query.filter_by(
+            user_id=user_id, location_id=location_id, status="active"
+        ).first():
             join_room(f"location:{location_id}")
             emit("room_joined", {"room": f"location:{location_id}"})
-        if company_id:
+        if company_id and Employment.query.filter_by(
+            user_id=user_id, comp_id=company_id, status="active"
+        ).first():
             join_room(f"company:{company_id}")
             emit("room_joined", {"room": f"company:{company_id}"})
 
@@ -53,21 +69,37 @@ def register_socket_handlers():
 
     @socketio.on("messaging:join")
     def handle_messaging_join(data):
-        """Join socket rooms for all user's channels."""
-        for channel_id in data.get("channel_ids", []):
+        """Join socket rooms for the caller's channels — membership is verified per channel."""
+        user_id = _socket_user_id()
+        if not user_id:
+            return
+        requested = [int(c) for c in (data or {}).get("channel_ids", []) if str(c).isdigit()]
+        if not requested:
+            return
+        allowed = {
+            m.channel_id for m in ChannelMember.query.filter(
+                ChannelMember.user_id == user_id,
+                ChannelMember.channel_id.in_(requested),
+            ).all()
+        }
+        for channel_id in allowed:
             join_room(f"channel_{channel_id}")
 
     @socketio.on("messaging:leave")
     def handle_messaging_leave(data):
-        channel_id = data.get("channel_id")
+        channel_id = (data or {}).get("channel_id")
         if channel_id:
             leave_room(f"channel_{channel_id}")
 
     @socketio.on("typing:start")
     def handle_typing_start(data):
+        data       = data or {}
         channel_id = data.get("channel_id")
-        user_name  = data.get("user_name", "Someone")
-        if channel_id:
+        user_name  = str(data.get("user_name", "Someone"))[:80]
+        user_id    = _socket_user_id()
+        if channel_id and user_id and ChannelMember.query.filter_by(
+            channel_id=channel_id, user_id=user_id
+        ).first():
             emit("typing", {
                 "channel_id": channel_id,
                 "user_name":  user_name,
@@ -76,8 +108,12 @@ def register_socket_handlers():
 
     @socketio.on("typing:stop")
     def handle_typing_stop(data):
+        data       = data or {}
         channel_id = data.get("channel_id")
-        if channel_id:
+        user_id    = _socket_user_id()
+        if channel_id and user_id and ChannelMember.query.filter_by(
+            channel_id=channel_id, user_id=user_id
+        ).first():
             emit("typing", {
                 "channel_id": channel_id,
                 "user_name":  data.get("user_name", "Someone"),

@@ -1,36 +1,50 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# MySchedule — manager web app
 
-## Getting Started
+Next.js 16 (App Router) · TypeScript · Tailwind CSS v4 · shadcn/ui on Base UI.
 
-First, run the development server:
+For owners, managers and supervisors: dashboard, schedule, team, analytics, requests
+and messaging. Staff use the mobile app (clock-in needs GPS, geofencing and biometrics).
+
+## Run locally
+
+Start the Flask API first (see `backend/README.md`), then:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env.local
+npm install
+npm run dev            # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+| Variable | Where it's used |
+| --- | --- |
+| `FLASK_API_URL` | Server-side: where the Next.js routes reach Flask |
+| `NEXT_PUBLIC_SOCKET_URL` | Browser: Socket.IO endpoint for live updates |
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Add the web origin (e.g. `http://localhost:3000`) to the backend's `CORS_ORIGINS` so the
+browser can open its socket.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## How auth works
 
-## Learn More
+The browser never sees the JWTs. `app/api/auth/*` sets them as httpOnly cookies and
+`app/api/proxy/[...path]` forwards every API call to Flask with the access token. When it
+expires, the proxy refreshes it once — concurrent requests share a single refresh — and
+retries. Socket.IO is the one exception: `/api/auth/socket-token` hands the short-lived
+access token to the socket handshake.
 
-To learn more about Next.js, take a look at the following resources:
+`proxy.ts` (Next 16's renamed middleware) only redirects signed-out visitors to `/login`;
+Flask enforces all real authorization.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Layout
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- `app/manager/*/page.tsx`: thin route files that render `components/manager/<section>`.
+- `lib/api/*`: one module per backend area; every call goes through `lib/api/client.ts`.
+- `lib/hooks/use-query.ts`: small data-fetching hook (no extra state library).
+- `lib/hooks/use-socket.ts`: a single shared Socket.IO connection with room membership.
+- `lib/format.ts`: every date/time conversion. Shift times are sent with the browser's
+  UTC offset; record timestamps (`created_at`) are naive UTC.
 
-## Deploy on Vercel
+## Checks
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npx eslint . && npx tsc --noEmit && npm run build
+```
