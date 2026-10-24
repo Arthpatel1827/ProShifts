@@ -1,0 +1,147 @@
+# MySchedule production stack.
+#
+#   cp .env.example .env      # fill in secrets and your domains
+#   docker compose up -d --build
+#
+# Only Caddy publishes ports. PostgreSQL, Redis, the API and the web server are reachable
+# only on the internal network.
+
+name: myschedule
+
+x-backend: &backend
+  build: ./backend
+  image: myschedule-api:latest
+  restart: unless-stopped
+  environment: &backend-env
+    FLASK_ENV: production
+    AUTO_CREATE_TABLES: "false"
+    DATABASE_URL: postgresql://${POSTGRES_USER:-myschedule}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-myschedule}
+    REDIS_URL: redis://redis:6379/0
+    CELERY_BROKER_URL: redis://redis:6379/1
+    CELERY_RESULT_BACKEND: redis://redis:6379/2
+    JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in .env (32+ random characters)}
+    JWT_ACCESS_TOKEN_EXPIRES: ${JWT_ACCESS_TOKEN_EXPIRES:-3600}
+    JWT_REFRESH_TOKEN_EXPIRES: ${JWT_REFRESH_TOKEN_EXPIRES:-2592000}
+    CORS_ORIGINS: ${WEB_ORIGIN:?Set WEB_ORIGIN in .env, e.g. https://app.example.com}
+    TRUSTED_PROXY_COUNT: "1"
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    EMAIL_SENDING_ENABLED: ${EMAIL_SENDING_ENABLED:-false}
+    MAIL_SERVER: ${MAIL_SERVER:-smtp.gmail.com}
+    MAIL_PORT: ${MAIL_PORT:-587}
+    MAIL_USE_TLS: ${MAIL_USE_TLS:-true}
+    MAIL_USERNAME: ${MAIL_USERNAME:-}
+    MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+    MAIL_DEFAULT_SENDER: ${MAIL_DEFAULT_SENDER:-}
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-myschedule}
+      POSTGRES_USER: ${POSTGRES_USER:-myschedule}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # AOF persistence keeps the token blocklist across restarts.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Applies Alembic migrations, then exits. api and worker wait for it to succeed.
+  migrate:
+    <<: *backend
+    restart: "no"
+    command: ["flask", "--app", "app.py", "db", "upgrade", "-d", "migrations"]
+
+  api:
+    <<: *backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=3).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  # Runs the AI schedule generation and staffing prediction jobs.
+  worker:
+    <<: *backend
+    command: ["celery", "-A", "workers.celery_app:celery", "worker", "--loglevel=info", "--concurrency=2"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./frontend/myschedule-web
+      args:
+        # Empty = connect sockets to the page's own origin (Caddy routes /socket.io).
+        NEXT_PUBLIC_SOCKET_URL: ""
+    image: myschedule-web:latest
+    restart: unless-stopped
+    environment:
+      FLASK_API_URL: http://api:5000
+      # Set COOKIE_SECURE=false in .env only for a plain-HTTP local trial.
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+      - "8080:8080"
+    environment:
+      WEB_ADDRESS: ${WEB_ADDRESS:-:80}
+      API_ADDRESS: ${API_ADDRESS:-:8080}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  redis-data:
+  caddy-data:
+  caddy-config:

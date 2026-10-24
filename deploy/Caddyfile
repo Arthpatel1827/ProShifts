@@ -1,0 +1,33 @@
+# Public entry point for the stack. Use real hostnames in .env (WEB_ADDRESS,
+# API_ADDRESS) and Caddy obtains and renews HTTPS certificates automatically.
+# For a local trial, the defaults serve plain HTTP on :80 and :8080.
+#
+# Caddy replaces any client-supplied X-Forwarded-For with the real client IP, which is
+# why the API trusts exactly one proxy hop (TRUSTED_PROXY_COUNT=1).
+
+(common) {
+	encode zstd gzip
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+	}
+	log {
+		output stdout
+		format console
+	}
+}
+
+# Manager web app. Socket.IO shares this origin so the browser needs no CORS.
+{$WEB_ADDRESS::80} {
+	import common
+	@socket path /socket.io/*
+	reverse_proxy @socket api:5000
+	reverse_proxy web:3000
+}
+
+# API for the mobile app (REST, /graphql and /socket.io).
+{$API_ADDRESS::8080} {
+	import common
+	reverse_proxy api:5000
+}

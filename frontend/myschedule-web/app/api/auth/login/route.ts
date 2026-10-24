@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { setSessionCookies } from "@/lib/auth/session";
 
-import { FLASK_URL } from "@/lib/auth/refresh";
+import { FLASK_URL, forwardedHeaders } from "@/lib/auth/refresh";
 
 export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => null);
@@ -13,7 +13,7 @@ export async function POST(req: NextRequest) {
     try {
         flaskRes = await fetch(`${FLASK_URL}/auth/login`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { ...forwardedHeaders(req), "Content-Type": "application/json" },
             body: JSON.stringify({ email: body.email, password: body.password }),
             cache: "no-store",
         });

@@ -5,7 +5,9 @@ const REFRESH_COOKIE = "myschedule_refresh";
 
 const cookieOpts = {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    // Secure in production. COOKIE_SECURE=false allows a plain-HTTP trial run
+    // (e.g. docker compose on http://localhost); never disable it behind HTTPS.
+    secure: process.env.COOKIE_SECURE ? process.env.COOKIE_SECURE === "true" : process.env.NODE_ENV === "production",
     sameSite: "lax" as const,
     path: "/",
 };
