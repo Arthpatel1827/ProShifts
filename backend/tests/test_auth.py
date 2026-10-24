@@ -61,3 +61,9 @@ def test_password_reset_rejects_wrong_code(client, world):
 def test_unknown_routes_return_json(client):
     res = client.get("/definitely-not-a-route")
     assert res.status_code == 404 and "error" in res.get_json()
+
+
+def test_health_reports_database_and_redis(client):
+    res = client.get("/health")
+    assert res.status_code == 200
+    assert res.get_json() == {"status": "ok", "database": True, "redis": True}

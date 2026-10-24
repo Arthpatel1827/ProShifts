@@ -32,7 +32,12 @@ class Config:
 
     SOCKETIO_MESSAGE_QUEUE = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     RATELIMIT_STORAGE_URI = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    RATELIMIT_DEFAULT = "200 per day;50 per hour"
+    # Per signed-in user (or per IP when anonymous). A manager dashboard makes ~10
+    # calls per page plus polling, so the old 50/hour locked people out within minutes.
+    RATELIMIT_DEFAULT = os.getenv("RATELIMIT_DEFAULT", "3000 per hour;300 per minute")
+    RATELIMIT_HEADERS_ENABLED = True
+    # Number of reverse proxies in front of Flask that set X-Forwarded-For (0 = trust none).
+    TRUSTED_PROXY_COUNT = int(os.getenv("TRUSTED_PROXY_COUNT", "0"))
 
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
     AI_MODEL = "claude-sonnet-4-6"
