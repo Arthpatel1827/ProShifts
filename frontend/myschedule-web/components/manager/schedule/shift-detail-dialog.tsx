@@ -16,6 +16,8 @@ import type { RoleWithStaff, Shift } from "@/lib/types";
 
 type Props = {
     shift: Shift | null;
+    /** Location timezone for displayed dates and times. */
+    tz: string;
     onOpenChange: (open: boolean) => void;
     roles: RoleWithStaff[];
     names: Map<number, string>;
@@ -23,7 +25,7 @@ type Props = {
     onChanged: (shift: Shift) => void;
 };
 
-export function ShiftDetailDialog({ shift, onOpenChange, roles, names, onEdit, onChanged }: Props) {
+export function ShiftDetailDialog({ shift, tz, onOpenChange, roles, names, onEdit, onChanged }: Props) {
     const toast = useToast();
     const [assignee, setAssignee] = useState("");
     const [busy, setBusy] = useState<string | null>(null);
@@ -100,7 +102,7 @@ export function ShiftDetailDialog({ shift, onOpenChange, roles, names, onEdit, o
             <Dialog
                 open={!!shift}
                 onOpenChange={onOpenChange}
-                title={formatDate(shift.start_time, { weekday: "long", month: "long" })}
+                title={formatDate(shift.start_time, { weekday: "long", month: "long" }, tz)}
                 description={shift.role ?? "Any role"}
                 footer={
                     !isCancelled && (
@@ -133,7 +135,7 @@ export function ShiftDetailDialog({ shift, onOpenChange, roles, names, onEdit, o
                         <div className="flex items-center gap-2">
                             <Clock className="size-4 text-muted-foreground" />
                             <dt className="sr-only">Time</dt>
-                            <dd>{formatTimeRange(shift.start_time, shift.end_time)}</dd>
+                            <dd>{formatTimeRange(shift.start_time, shift.end_time, tz)}</dd>
                         </div>
                         <div className="flex items-center gap-2">
                             <Coffee className="size-4 text-muted-foreground" />

@@ -1,7 +1,9 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { LogOut, Menu, MapPin } from "lucide-react";
+import { useState } from "react";
+import { Globe, LogOut, Menu, MapPin } from "lucide-react";
+import { LocationTimezoneDialog } from "./location-timezone";
 import { logout } from "@/lib/api/auth";
 import { Avatar } from "@/components/ui/primitives";
 import { useManager } from "./manager-context";
@@ -18,7 +20,8 @@ const PAGE_TITLES: Record<string, string> = {
 export function TopBar({ onMenu }: { onMenu: () => void }) {
     const pathname = usePathname();
     const router = useRouter();
-    const { user, locations, location, setLocationId } = useManager();
+    const { user, locations, location, setLocationId, timezone, canApprove } = useManager();
+    const [tzOpen, setTzOpen] = useState(false);
 
     const title = Object.entries(PAGE_TITLES).find(([path]) => pathname.startsWith(path))?.[1] ?? "";
     const name = user?.display_name || user?.username || "";
@@ -65,6 +68,18 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
                     </span>
                 ) : null}
 
+                {location && (
+                    <button
+                        onClick={canApprove ? () => setTzOpen(true) : undefined}
+                        disabled={!canApprove}
+                        title={canApprove ? "Change the location's timezone" : "Location timezone"}
+                        className="hidden items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-muted-foreground enabled:hover:bg-accent enabled:hover:text-foreground lg:flex"
+                    >
+                        <Globe className="h-3.5 w-3.5" />
+                        {timezone.replace(/_/g, " ")}
+                    </button>
+                )}
+
                 {name && (
                     <div className="hidden items-center gap-2 md:flex">
                         <Avatar name={name} />
@@ -83,6 +98,7 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
                     <span className="hidden sm:inline">Sign out</span>
                 </button>
             </div>
+            <LocationTimezoneDialog open={tzOpen} onOpenChange={setTzOpen} />
         </header>
     );
 }

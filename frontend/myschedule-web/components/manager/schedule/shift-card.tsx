@@ -7,6 +7,8 @@ import type { Shift } from "@/lib/types";
 
 type ShiftCardProps = {
     shift: Shift;
+    /** Location timezone for the displayed times. */
+    tz: string;
     /** user_id → display name, from /shifts/roles-with-staff */
     names?: Map<number, string>;
     onClick?: () => void;
@@ -18,7 +20,7 @@ const STATUS_STYLES: Record<Shift["status"], { bg: string; text: string; label: 
     cancelled: { bg: "bg-muted", text: "text-muted-foreground", label: "CANCELLED", bar: "bg-muted-foreground/40" },
 };
 
-export function ShiftCard({ shift, names, onClick }: ShiftCardProps) {
+export function ShiftCard({ shift, tz, names, onClick }: ShiftCardProps) {
     const style = STATUS_STYLES[shift.status];
     const isCancelled = shift.status === "cancelled";
     const assignees = shift.assignments.map((a) => names?.get(a.user_id) ?? `#${a.user_id}`);
@@ -35,7 +37,7 @@ export function ShiftCard({ shift, names, onClick }: ShiftCardProps) {
             <span className={cn("absolute inset-y-0 left-0 w-1", style.bar)} aria-hidden />
             <div className="mb-1 flex flex-wrap items-start justify-between gap-1">
                 <span className={cn("min-w-0 font-medium leading-snug text-foreground", isCancelled && "line-through")}>
-                    {formatTimeRange(shift.start_time, shift.end_time)}
+                    {formatTimeRange(shift.start_time, shift.end_time, tz)}
                 </span>
                 <span
                     className={cn(
