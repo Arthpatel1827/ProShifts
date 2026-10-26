@@ -9,6 +9,7 @@ import { roleColor } from '../../theme/roleColors';
 import { ShiftsAPI } from '../../api/api';
 import WeekTimeline, { TimelineShift } from './WeekTimeline';
 import { addDaysKey, dateKeyIn, formatKey, mondayKey, timeIn, todayKeyIn } from '../../utils/zoned';
+import { workingDays } from '../../utils/timelineSegments';
 
 type MyShift = TimelineShift & {
     notes?: string | null;
@@ -32,7 +33,8 @@ export default function MyWeekView() {
     const load = useCallback(async (wk: string) => {
         setError(null);
         try {
-            const { data } = await ShiftsAPI.mine(wk);
+            // Include last night's shift that runs into Monday so the timeline can show it.
+            const { data } = await ShiftsAPI.mine(wk, true);
             const list: MyShift[] = data?.shifts ?? [];
             setShifts(list);
             if (list[0]?.timezone) setTz(list[0].timezone);
@@ -48,9 +50,16 @@ export default function MyWeekView() {
 
     const today = todayKeyIn(tz);
     const thisWeek = mondayKey(today);
-    const todays = useMemo(() => shifts.filter(s => dateKeyIn(s.start_time, tz) === today), [shifts, tz, today]);
-    const total = shifts.reduce((n, s) => n + paidHours(s), 0);
-    const daysOff = 7 - new Set(shifts.map(s => dateKeyIn(s.start_time, tz))).size;
+    const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDaysKey(week, i)), [week]);
+    // Shifts that belong to this week (start in it). Last Sunday's overnight shift is only
+    // drawn on Monday's row; its hours count in the week it started.
+    const own = useMemo(() => shifts.filter(s => days.includes(dateKeyIn(s.start_time, tz))), [shifts, days, tz]);
+    // Today: anything you work today, including the end of last night's shift.
+    const todays = useMemo(() => shifts.filter(s =>
+        dateKeyIn(s.start_time, tz) === today || (dateKeyIn(s.end_time, tz) === today && dateKeyIn(s.start_time, tz) < today)
+    ), [shifts, tz, today]);
+    const total = own.reduce((n, s) => n + paidHours(s), 0);
+    const daysOff = 7 - workingDays(shifts, tz, days).size;
     const roles = useMemo(() => Array.from(new Set(shifts.map(s => s.role).filter(Boolean))) as string[], [shifts]);
     const range = `${formatKey(week, { month: 'short', day: 'numeric' })} – ${formatKey(addDaysKey(week, 6), { month: 'short', day: 'numeric' })}`;
 
@@ -85,7 +94,9 @@ export default function MyWeekView() {
                         return (
                             <Pressable key={s.shift_id} onPress={() => setOpen(s)} style={styles.todayRow}>
                                 <View style={[styles.dot, { backgroundColor: c.solid }]} />
-                                <Text style={styles.todayTime}>{timeIn(s.start_time, tz)} – {timeIn(s.end_time, tz)}</Text>
+                                <Text style={styles.todayTime}>
+                                    {dateKeyIn(s.start_time, tz) < today ? 'Until ' : `${timeIn(s.start_time, tz)} – `}{timeIn(s.end_time, tz)}
+                                </Text>
                                 <Text style={styles.todayRole} numberOfLines={1}>{s.role ?? 'Shift'}</Text>
                                 <Ionicons name="chevron-forward" size={16} color={colors.gray} />
                             </Pressable>
@@ -95,7 +106,7 @@ export default function MyWeekView() {
             )}
 
             <View style={styles.summary}>
-                <Text style={styles.summaryText}><Text style={styles.summaryNum}>{shifts.length}</Text> shift{shifts.length === 1 ? '' : 's'}</Text>
+                <Text style={styles.summaryText}><Text style={styles.summaryNum}>{own.length}</Text> shift{own.length === 1 ? '' : 's'}</Text>
                 <Text style={styles.summaryText}><Text style={styles.summaryNum}>{fmtH(total)}</Text> paid</Text>
                 <Text style={styles.summaryText}><Text style={styles.summaryNum}>{daysOff}</Text> day{daysOff === 1 ? '' : 's'} off</Text>
             </View>
@@ -108,7 +119,7 @@ export default function MyWeekView() {
                 ) : (
                     <WeekTimeline weekStart={week} shifts={shifts} tz={tz} onShiftPress={s => setOpen(s as MyShift)} onSwipe={go} />
                 )}
-                {!loading && !error && shifts.length === 0 && (
+                {!loading && !error && daysOff === 7 && (
                     <Text style={styles.empty}>No shifts this week. Swipe or use the arrows to see other weeks.</Text>
                 )}
             </View>

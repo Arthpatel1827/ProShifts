@@ -8,7 +8,8 @@ import { View, Text, StyleSheet, Pressable, PanResponder, LayoutChangeEvent } fr
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { roleColor } from '../../theme/roleColors';
-import { addDaysKey, clockLabel, dateKeyIn, daysBetween, formatKey, minutesIn, todayKeyIn } from '../../utils/zoned';
+import { addDaysKey, clockLabel, formatKey, minutesIn, todayKeyIn } from '../../utils/zoned';
+import { Segment as Seg, splitShifts } from '../../utils/timelineSegments';
 
 export type TimelineShift = {
     shift_id: number;
@@ -20,14 +21,7 @@ export type TimelineShift = {
     timezone?: string;
 };
 
-type Segment = {
-    shift: TimelineShift;
-    day: string;
-    from: number;      // minutes since local midnight of `day`
-    to: number;
-    continues: boolean; // runs past midnight into the next row
-    continued: boolean; // the after-midnight part of yesterday's shift
-};
+type Segment = Seg<TimelineShift>;
 
 const DAY_W = 46;
 const ROW_H = 56;
@@ -44,19 +38,9 @@ export default function WeekTimeline({ weekStart, shifts, tz, onShiftPress, onSw
     const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDaysKey(weekStart, i)), [weekStart]);
     const today = todayKeyIn(tz);
 
-    // Split overnight shifts at midnight so each day row shows its own part.
-    const segments = useMemo(() => {
-        const out: Segment[] = [];
-        for (const s of shifts) {
-            if (s.status === 'cancelled') continue;
-            const startDay = dateKeyIn(s.start_time, tz);
-            const from = minutesIn(s.start_time, tz);
-            const to = minutesIn(s.end_time, tz) + daysBetween(startDay, dateKeyIn(s.end_time, tz)) * 1440;
-            out.push({ shift: s, day: startDay, from, to: Math.min(to, 1440), continues: to > 1440, continued: false });
-            if (to > 1440) out.push({ shift: s, day: addDaysKey(startDay, 1), from: 0, to: Math.min(to - 1440, 1440), continues: false, continued: true });
-        }
-        return out;
-    }, [shifts, tz]);
+    // Overnight shifts are split at midnight so each day row shows its own part — including
+    // a shift from the night before this week (its Monday part). Still one shift each.
+    const segments = useMemo(() => splitShifts(shifts, tz, days), [shifts, tz, days]);
 
     // Hours shown: what this week uses, at least 8 h, on whole hours.
     const [axisFrom, axisTo] = useMemo(() => {

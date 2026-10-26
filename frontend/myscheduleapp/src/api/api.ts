@@ -121,8 +121,9 @@ export const ShiftsAPI = {
     list: (location_id: number, week_start?: string, status?: string) =>
         api.get('/shifts/', { params: { location_id, week_start, status } }),
 
-    mine: (week_start?: string) =>
-        api.get('/shifts/mine', { params: { week_start } }),
+    // include_overlapping: also a shift from the night before that runs into the week.
+    mine: (week_start?: string, include_overlapping = false) =>
+        api.get('/shifts/mine', { params: { week_start, include_overlapping: include_overlapping || undefined } }),
 
     get: (shift_id: number) =>
         api.get(`/shifts/${shift_id}`),

@@ -35,7 +35,8 @@ class ShiftController:
     def my_shifts(self):
         caller_id  = int(get_jwt_identity())
         week_start = request.args.get("week_start")
-        shifts     = svc.get_my_shifts(caller_id, week_start)
+        overlap    = request.args.get("include_overlapping", "").lower() in ("1", "true", "yes")
+        shifts     = svc.get_my_shifts(caller_id, week_start, include_overlapping=overlap)
         return jsonify({"shifts": [svc.serialize(s) for s in shifts]}), 200
 
     def get_shift(self, shift_id):

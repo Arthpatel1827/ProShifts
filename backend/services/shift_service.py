@@ -97,7 +97,10 @@ class ShiftService:
         self._assert_member(caller_user_id, shift.location_id)
         return shift
 
-    def get_my_shifts(self, user_id: int, week_start=None):
+    def get_my_shifts(self, user_id: int, week_start=None, include_overlapping=False):
+        """Published shifts of this user. With week_start: the ones starting in those 7 local
+        days; include_overlapping also returns a shift that started the night before and
+        runs into the week (e.g. Sunday 10 PM → Monday 6 AM), still as one shift."""
         q = (
             db.session.query(Shift)
             .join(ShiftAssignment, ShiftAssignment.shift_id == Shift.shift_id)
@@ -108,7 +111,10 @@ class ShiftService:
             tz = tzu.user_tz(user_id)
             ws, _ = tzu.day_bounds(tz, day)
             we, _ = tzu.day_bounds(tz, day + timedelta(days=7))
-            q = q.filter(Shift.start_time >= ws, Shift.start_time < we)
+            if include_overlapping:
+                q = q.filter(Shift.start_time < we, Shift.end_time > ws)
+            else:
+                q = q.filter(Shift.start_time >= ws, Shift.start_time < we)
         return q.order_by(Shift.start_time.asc()).all()
 
     # ── Update ────────────────────────────────────────────────────────────────

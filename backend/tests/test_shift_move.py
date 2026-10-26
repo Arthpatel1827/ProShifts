@@ -320,3 +320,18 @@ def test_week_status_clock_and_flags(app, client, world, monkeypatch):
                       headers=world.headers(world.staff_a)).status_code == 403
     assert client.get(f"/shifts/week-status?location_id={world.loc_a}&week_start={day(0)}",
                       headers=world.headers(world.owner_b)).status_code == 403
+
+
+# ── /shifts/mine and overnight shifts crossing into the week ────────────────
+def test_mine_includes_previous_sunday_overnight_once(app, client, world):
+    sun_night = world.shift(world.loc_a, MON - timedelta(hours=2), hours=8, assign=[world.staff_a], status="published")  # Sun 22:00 → Mon 06:00
+    mon = world.shift(world.loc_a, MON + timedelta(hours=12), hours=4, assign=[world.staff_a], status="published")
+    sun_out = world.shift(world.loc_a, MON + timedelta(days=6, hours=22), hours=8, assign=[world.staff_a], status="published")  # into next week
+    h = world.headers(world.staff_a)
+    plain = client.get(f"/shifts/mine?week_start={day(0)}", headers=h).get_json()["shifts"]
+    assert [s["shift_id"] for s in plain] == [mon, sun_out]  # unchanged default (home screen counts)
+    over = client.get(f"/shifts/mine?week_start={day(0)}&include_overlapping=1", headers=h).get_json()["shifts"]
+    ids = [s["shift_id"] for s in over]
+    assert ids == [sun_night, mon, sun_out] and len(set(ids)) == 3  # one record each, never duplicated
+    nxt = client.get(f"/shifts/mine?week_start={day(7)}&include_overlapping=1", headers=h).get_json()["shifts"]
+    assert [s["shift_id"] for s in nxt] == [sun_out]
