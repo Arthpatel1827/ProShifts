@@ -3,6 +3,7 @@ from datetime import datetime
 from extensions import db
 from models import ShiftSwap, ShiftAssignment, Shift, Employment, AppUser
 from services.notification_service import NotificationService
+from utils import timezones as tzu
 
 notif_svc = NotificationService()
 
@@ -65,7 +66,7 @@ class SwapService:
             title="Swap Request Received",
             body=(
                 f"{requester.display_name or requester.username} wants to swap their shift on "
-                f"{shift.start_time.strftime('%b %d at %I:%M %p')} with one of yours."
+                f"{tzu.shift_local_str(shift)} with one of yours."
             ),
             data={"swap_id": swap.swap_id},
         )
@@ -98,7 +99,7 @@ class SwapService:
             title="Someone Offered a Swap",
             body=(
                 f"{offerer.display_name or offerer.username} offered their shift on "
-                f"{offered_shift.start_time.strftime('%b %d at %I:%M %p')} in exchange."
+                f"{tzu.shift_local_str(offered_shift)} in exchange."
             ),
             data={"swap_id": swap_id},
         )
@@ -467,7 +468,7 @@ class SwapService:
                 title="Shift Available for Swap",
                 body=(
                     f"{name} is looking to swap their shift on "
-                    f"{shift.start_time.strftime('%b %d at %I:%M %p')}. "
+                    f"{tzu.shift_local_str(shift)}. "
                     f"Offer one of your shifts in return."
                 ),
                 data={"swap_id": swap.swap_id},

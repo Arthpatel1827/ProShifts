@@ -47,7 +47,12 @@ PASSWORD = "Correct-horse-1"
 
 @pytest.fixture(scope="session")
 def app():
-    flask_app.config.update(TESTING=True, RATELIMIT_ENABLED=False)
+    flask_app.config.update(TESTING=True)
+    # RATELIMIT_ENABLED in config is only read at init_app, which already ran when app.py
+    # was imported; switch the limiter off directly. Limits persist in Redis between
+    # runs, so without this the suite starts failing with 429s after a few runs an hour.
+    from extensions import limiter
+    limiter.enabled = False
     return flask_app
 
 

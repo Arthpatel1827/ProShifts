@@ -5,6 +5,8 @@ from models             import Employment, Shift, TimeEntry
 from datetime           import datetime, timezone, timedelta
 from collections        import defaultdict
 from services.rbac_service import require_location_role
+from models import Location
+from utils import timezones as tzu
 
 
 class AnalyticsController:
@@ -30,36 +32,26 @@ class AnalyticsController:
         if err_resp:
             return err_resp, err_code
 
-        now = datetime.now(timezone.utc)
+        # Every day/week/month boundary is in this location's timezone. Analytics are
+        # always scoped to one location, so there is exactly one timezone per request.
+        tz     = tzu.location_tz(Location.query.get(location_id))
+        today  = tzu.local_today(tz)
+        anchor = tzu.parse_date(start_date) or today
 
-        # ── Compute date range ────────────────────────────────────────────────
-        if start_date:
-            try:
-                anchor = datetime.strptime(start_date, '%Y-%m-%d').replace(
-                    tzinfo=timezone.utc
-                )
-            except ValueError:
-                anchor = now
-        else:
-            anchor = now
-
+        # start_day/end_day: local calendar dates [start_day, end_day)
         if period == 'day':
-            start = anchor.replace(hour=0, minute=0, second=0, microsecond=0)
-            end   = start + timedelta(days=1)
-
+            start_day = anchor
+            end_day   = anchor + timedelta(days=1)
         elif period == 'week':
-            dow   = anchor.weekday()
-            start = (anchor - timedelta(days=dow)).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-            end   = start + timedelta(days=7)
-
+            start_day = tzu.week_monday(anchor)
+            end_day   = start_day + timedelta(days=7)
         else:  # month
-            start = anchor.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            if start.month == 12:
-                end = start.replace(year=start.year + 1, month=1)
-            else:
-                end = start.replace(month=start.month + 1)
+            period    = 'month'
+            start_day = anchor.replace(day=1)
+            end_day   = (start_day.replace(year=start_day.year + 1, month=1) if start_day.month == 12
+                         else start_day.replace(month=start_day.month + 1))
+        start, _ = tzu.day_bounds(tz, start_day)   # aware UTC instants for queries
+        end, _   = tzu.day_bounds(tz, end_day)
 
         # ── Active employees ──────────────────────────────────────────────────
         emps        = Employment.query.filter_by(
@@ -127,7 +119,7 @@ class AnalyticsController:
                 user = AppUser.query.get(entry.user_id)
                 late_list.append({
                     'name':      user.display_name or user.username if user else 'Unknown',
-                    'date':      shift.start_time.strftime('%b %d'),
+                    'date':      tzu.to_local(shift.start_time, tz).strftime('%b %d'),
                     'mins_late': int(mins_late),
                 })
 
@@ -139,13 +131,13 @@ class AnalyticsController:
         # ── Hours per day (for week/month bar chart) ──────────────────────────
         daily_worked = defaultdict(float)
         for entry in entries:
-            key = entry.clock_in.strftime('%Y-%m-%d')
+            key = tzu.local_date_of(entry.clock_in, tz).isoformat()
             daily_worked[key] += (entry.total_minutes or 0) / 60
 
         hours_per_day = []
-        current = start
-        while current < end:
-            key = current.strftime('%Y-%m-%d')
+        current = start_day
+        while current < end_day:
+            key = current.isoformat()
             hours_per_day.append({
                 'date':   key,
                 'day':    current.strftime('%a'),
@@ -177,67 +169,40 @@ class AnalyticsController:
         # ── Trend data ────────────────────────────────────────────────────────
         trend_data = []
 
+        def worked(w_start, w_end):
+            rows = TimeEntry.query.filter(
+                TimeEntry.user_id.in_(emp_user_ids),
+                TimeEntry.clock_in  >= w_start,
+                TimeEntry.clock_in  <  w_end,
+                TimeEntry.clock_out != None,
+            ).all()
+            hours = sum((e.total_minutes or 0) / 60 for e in rows)
+            cost  = 0.0
+            for e in rows:
+                r    = emp_map.get(e.user_id)
+                rate = float(r.hourly_rate) if (r and r.hourly_rate) else 0.0
+                cost += (e.total_minutes or 0) / 60 * rate
+            return round(hours, 1), round(cost, 2)
+
         if period in ('day', 'week'):
-            # Last 4 weeks
+            # Last 4 local weeks, Monday to Monday.
+            this_monday = tzu.week_monday(today)
             for i in range(3, -1, -1):
-                w_start = (now - timedelta(weeks=i)).replace(
-                    hour=0, minute=0, second=0, microsecond=0
-                )
-                w_start -= timedelta(days=w_start.weekday())
-                w_end    = w_start + timedelta(days=7)
-
-                w_entries = TimeEntry.query.filter(
-                    TimeEntry.user_id.in_(emp_user_ids),
-                    TimeEntry.clock_in  >= w_start,
-                    TimeEntry.clock_in  <  w_end,
-                    TimeEntry.clock_out != None,
-                ).all()
-
-                w_hours = sum((e.total_minutes or 0) / 60 for e in w_entries)
-                w_cost  = 0.0
-                for e in w_entries:
-                    r    = emp_map.get(e.user_id)
-                    rate = float(r.hourly_rate) if (r and r.hourly_rate) else 0.0
-                    w_cost += (e.total_minutes or 0) / 60 * rate
-
-                trend_data.append({
-                    'label': w_start.strftime('%b %d'),
-                    'hours': round(w_hours, 1),
-                    'cost':  round(w_cost, 2),
-                })
+                monday = this_monday - timedelta(weeks=i)
+                w_start, w_end = tzu.week_bounds(tz, monday)
+                hours, cost = worked(w_start, w_end)
+                trend_data.append({'label': monday.strftime('%b %d'), 'hours': hours, 'cost': cost})
         else:
-            # Last 4 months
+            # Last 4 local calendar months.
+            first = today.replace(day=1)
             for i in range(3, -1, -1):
-                m  = (now.month - i - 1) % 12 + 1
-                yr = now.year if now.month - i > 0 else now.year - 1
-                try:
-                    m_start = datetime(yr, m, 1, tzinfo=timezone.utc)
-                    if m == 12:
-                        m_end = datetime(yr + 1, 1, 1, tzinfo=timezone.utc)
-                    else:
-                        m_end = datetime(yr, m + 1, 1, tzinfo=timezone.utc)
-                except ValueError:
-                    continue
-
-                m_entries = TimeEntry.query.filter(
-                    TimeEntry.user_id.in_(emp_user_ids),
-                    TimeEntry.clock_in  >= m_start,
-                    TimeEntry.clock_in  <  m_end,
-                    TimeEntry.clock_out != None,
-                ).all()
-
-                m_hours = sum((e.total_minutes or 0) / 60 for e in m_entries)
-                m_cost  = 0.0
-                for e in m_entries:
-                    r    = emp_map.get(e.user_id)
-                    rate = float(r.hourly_rate) if (r and r.hourly_rate) else 0.0
-                    m_cost += (e.total_minutes or 0) / 60 * rate
-
-                trend_data.append({
-                    'label': m_start.strftime('%b'),
-                    'hours': round(m_hours, 1),
-                    'cost':  round(m_cost, 2),
-                })
+                y, m = first.year, first.month - i
+                while m <= 0:
+                    y, m = y - 1, m + 12
+                month_first = first.replace(year=y, month=m)
+                m_start, m_end = tzu.month_bounds(tz, month_first)
+                hours, cost = worked(m_start, m_end)
+                trend_data.append({'label': month_first.strftime('%b'), 'hours': hours, 'cost': cost})
 
         # ── Hours by role ─────────────────────────────────────────────────────
         role_hours: dict[str, float] = defaultdict(float)
@@ -258,16 +223,17 @@ class AnalyticsController:
 
         # ── Date range labels ─────────────────────────────────────────────────
         if period == 'day':
-            date_label = start.strftime('%a, %b %d %Y')
+            date_label = start_day.strftime('%a, %b %d %Y')
         elif period == 'week':
-            date_label = f"{start.strftime('%b %d')} – {(end - timedelta(days=1)).strftime('%b %d, %Y')}"
+            date_label = f"{start_day.strftime('%b %d')} – {(end_day - timedelta(days=1)).strftime('%b %d, %Y')}"
         else:
-            date_label = start.strftime('%B %Y')
+            date_label = start_day.strftime('%B %Y')
 
         return jsonify({
             'period':               period,
-            'start':                start.strftime('%Y-%m-%d'),
-            'end':                  end.strftime('%Y-%m-%d'),
+            'start':                start_day.isoformat(),
+            'end':                  end_day.isoformat(),
+            'timezone':             tz.key,
             'date_label':           date_label,
             'summary': {
                 'scheduled_hours': round(scheduled_hours, 1),

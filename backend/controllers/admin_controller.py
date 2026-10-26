@@ -253,6 +253,13 @@ class AdminController:
                 location.loc_lng = (
                     float(data["loc_lng"]) if data["loc_lng"] is not None else None
                 )
+            if "timezone" in data:
+                # Defines the location's calendar day for schedules, attendance and analytics.
+                from utils.timezones import is_valid_timezone
+                tz_name = (data["timezone"] or "").strip()
+                if not is_valid_timezone(tz_name):
+                    return jsonify({"error": "Unknown timezone. Use an IANA name such as America/Toronto."}), 400
+                location.timezone = tz_name
 
             db.session.commit()
 
@@ -264,6 +271,7 @@ class AdminController:
                     "address": location.loc_address,
                     "loc_lat": location.loc_lat,
                     "loc_lng": location.loc_lng,
+                    "timezone": location.timezone,
                 },
             }), 200
 
