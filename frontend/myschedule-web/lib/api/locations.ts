@@ -10,3 +10,8 @@ export async function listLocations(): Promise<Location[]> {
 export async function updateLocationTimezone(locationId: number, timezone: string): Promise<void> {
     await api.put(`/admin/locations/${locationId}`, { timezone });
 }
+
+/** Owners/managers only. Where GPS clock-in measures distance from. null clears it. */
+export async function updateLocationCoords(locationId: number, lat: number | null, lng: number | null): Promise<void> {
+    await api.put(`/admin/locations/${locationId}`, { loc_lat: lat, loc_lng: lng });
+}

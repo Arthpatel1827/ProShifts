@@ -5,3 +5,4 @@ export * from "./requests";
 export * from "./analytics";
 export * from "./messaging";
 export * from "./ai";
+export * from "./settings";

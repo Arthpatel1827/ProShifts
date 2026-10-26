@@ -9,6 +9,7 @@ import {
     BarChart3,
     ListChecks,
     MessageSquare,
+    Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useManager } from "./manager-context";
@@ -20,6 +21,7 @@ const NAV_ITEMS = [
     { href: "/manager/analytics", label: "Analytics", icon: BarChart3 },
     { href: "/manager/requests", label: "Requests", icon: ListChecks, badge: "pending" as const },
     { href: "/manager/messaging", label: "Messaging", icon: MessageSquare },
+    { href: "/manager/settings", label: "Settings", icon: Settings },
 ];
 
 export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }) {

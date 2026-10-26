@@ -16,6 +16,7 @@ const PAGE_TITLES: Record<string, string> = {
     "/manager/analytics": "Analytics",
     "/manager/requests": "Requests",
     "/manager/messaging": "Messaging",
+    "/manager/settings": "Settings",
 };
 
 export function TopBar({ onMenu }: { onMenu: () => void }) {
