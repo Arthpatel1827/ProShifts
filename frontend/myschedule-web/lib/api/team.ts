@@ -1,5 +1,5 @@
 import { api, qs } from "./client";
-import type { EmployeeProfile, EmployeeProfileUpdate, StaffMember, TeamMember } from "@/lib/types";
+import type { EmployeeProfile, EmployeeProfileUpdate, InviteDelivery, StaffMember, TeamMember } from "@/lib/types";
 
 export async function listStaff(locationId: number): Promise<StaffMember[]> {
     const res = await api.get<{ staff: StaffMember[] }>(`/admin/staff${qs({ location_id: locationId })}`);
@@ -30,10 +30,19 @@ export async function inviteStaff(input: {
     email: string;
     location_id: number;
     position: string;
-}): Promise<{ user_id: number; invite_id: number; email: string }> {
-    const res = await api.post<{ result: { user_id: number; invite_id: number; email: string } }>(
+}): Promise<{ user_id: number; invite_id: number; email: string } & InviteDelivery> {
+    const res = await api.post<{ result: { user_id: number; invite_id: number; email: string } & InviteDelivery }>(
         "/onboarding/invite",
         input
     );
+    return res.result;
+}
+
+/** Sends new login details to an invited employee. Their current password stops working. */
+export async function resendInvite(userId: number, locationId: number): Promise<{ user_id: number; email: string } & InviteDelivery> {
+    const res = await api.post<{ result: { user_id: number; email: string } & InviteDelivery }>("/onboarding/invite/resend", {
+        user_id: userId,
+        location_id: locationId,
+    });
     return res.result;
 }

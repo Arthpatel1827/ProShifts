@@ -6,6 +6,15 @@ from models import Employment, Location, OnboardingInvite
 from services.rbac_service import APPROVER_ROLES, require_location_role
 
 
+def _delivery(email_sent: bool, temp_password: str) -> dict:
+    """The temporary password goes back to the manager ONLY when the email didn't go out,
+    so they can pass it on in person. When it was emailed, it is never returned."""
+    out = {"email_sent": bool(email_sent)}
+    if not email_sent:
+        out["temp_password"] = temp_password
+    return out
+
+
 class OnboardingController:
     def __init__(self):
         self.svc = OnboardingService()
@@ -46,7 +55,7 @@ class OnboardingController:
             return jsonify({"error": "Role name is too long"}), 400
 
         if OnboardingInvite.query.filter_by(email=email, location_id=location_id, status="sent").first():
-            return jsonify({"error": "An invite has already been sent to this email"}), 400
+            return jsonify({"error": "An invite has already been sent to this email. Use Resend invite on the Team page to send new login details."}), 400
 
         # Ensure the chosen location belongs to this company
         location = (
@@ -58,7 +67,7 @@ class OnboardingController:
             return jsonify({"error": "Invalid location_id for this company"}), 400
 
         try:
-            invite, user = self.svc.create_invite(
+            invite, user, email_sent, temp_password = self.svc.create_invite(
                 company=location.company,
                 location=location,
                 email=email,
@@ -72,12 +81,62 @@ class OnboardingController:
             return jsonify({"error": "Something went wrong"}), 500
 
         return jsonify({
-            "message": "Onboarding email sent.",
+            "message": "Onboarding email sent." if email_sent else "Invite created, but the email was not sent.",
             "result": {
                 "user_id": int(user.user_id),
                 "invite_id": int(invite.form_id),
                 "email": email,
+                **_delivery(email_sent, temp_password),
             },
+        }), 200
+
+    # Manager/Owner endpoint: send new login details to someone already invited
+    def resend_invite(self):
+        data = request.get_json(silent=True) or {}
+        try:
+            caller_id = int(get_jwt_identity())
+            user_id = int(data.get("user_id"))
+            location_id = int(data.get("location_id"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "user_id and location_id are required"}), 400
+
+        try:
+            caller_emp = require_location_role(caller_id, location_id, APPROVER_ROLES)
+        except PermissionError:
+            return jsonify({"error": "Only an owner or manager at this location can resend invites"}), 403
+        if user_id == caller_id:
+            return jsonify({"error": "You can't resend an invite to yourself. Change your password from your profile instead."}), 400
+
+        # Same location (and so same company); other tenants' users look like "not found".
+        target = Employment.query.filter_by(user_id=user_id, location_id=location_id, comp_id=caller_emp.comp_id).first()
+        if not target or not target.user:
+            return jsonify({"error": "Employee not found at this location"}), 404
+        if target.status != "active":
+            return jsonify({"error": "This employee is inactive. Reactivate them before resending the invite."}), 400
+
+        # Resending resets the password, so it must never become a way to take over a
+        # more senior account.
+        target_role = (target.role.name if target.role else "").lower()
+        caller_role = (caller_emp.role.name if caller_emp.role else "").lower()
+        if target_role == "owner":
+            return jsonify({"error": "Owners can't be re-invited."}), 403
+        if target_role in ("manager", "supervisor") and caller_role != "owner":
+            return jsonify({"error": "Only an owner can resend an invite to a manager or supervisor."}), 403
+
+        if not OnboardingInvite.query.filter_by(email=target.user.user_email, location_id=location_id).first():
+            return jsonify({"error": "This person wasn't invited by email, so there's no invite to resend. They can reset their password from the mobile app."}), 400
+
+        location = Location.query.get(location_id)
+        try:
+            email_sent, temp_password = self.svc.resend_invite(company=location.company, location=location, user=target.user)
+        except Exception:
+            from flask import current_app
+            current_app.logger.exception("Error resending onboarding invite")
+            return jsonify({"error": "Something went wrong"}), 500
+
+        return jsonify({
+            "message": "New login details emailed." if email_sent else "New login details created, but the email was not sent.",
+            "result": {"user_id": user_id, "email": target.user.user_email, **_delivery(email_sent, temp_password)},
         }), 200
 
     # Public endpoint: prevalidate invite link (legacy / if you still want it)
