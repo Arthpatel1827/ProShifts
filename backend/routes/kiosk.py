@@ -6,7 +6,7 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from extensions import limiter
-from services.kiosk_service import INVALID_PIN, KioskLocked, KioskService
+from services.kiosk_service import INVALID_PIN, KioskLocked, KioskNotConfigured, KioskService
 
 router = Blueprint("kiosk", __name__, url_prefix="/kiosk")
 svc = KioskService()
@@ -20,6 +20,11 @@ def _device_key():
 
 def _err(e, code):
     return jsonify({"error": str(e)}), code
+
+
+@router.errorhandler(KioskNotConfigured)
+def _not_configured(e):
+    return jsonify({"error": str(e), "code": e.code}), 503
 
 
 # ── The employee's own PIN ────────────────────────────────────────────────────

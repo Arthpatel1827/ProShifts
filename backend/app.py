@@ -35,6 +35,16 @@ def create_app():
 
     init_extensions(app)
 
+    # Clock-in PINs need their own key. Missing → PIN features answer 503 with what to set;
+    # the rest of the app works. The value itself is never logged.
+    with app.app_context():
+        from services.kiosk_service import kiosk_secret_problem
+        problem = kiosk_secret_problem(app.config.get("KIOSK_PIN_SECRET"))
+        if problem:
+            import logging as _logging
+            _logging.getLogger("proshifts.config").warning(
+                "Personal clock-in PINs are disabled: %s. Set it in backend/.env.", problem)
+
     # AI request logs (feature, model, latency, outcome — never keys or prompts). Nothing
     # else configures logging, so without a handler these INFO lines would be dropped.
     import logging

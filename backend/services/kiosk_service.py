@@ -6,6 +6,8 @@ PINs
   - Stored as HMAC-SHA256(KIOSK_PIN_SECRET, "<company>:<pin>"), never the PIN. With only
     10,000 possible PINs a plain hash would be reversible from a database copy; the
     server-side key prevents that. The same PIN in two companies hashes differently.
+    KIOSK_PIN_SECRET is its own secret (not the JWT one) and is required: without it the
+    PIN features answer 503 KIOSK_NOT_CONFIGURED instead of hashing with something weaker.
   - Unique within a company, so a PIN identifies one person at the tablet.
   - Never returned to anyone (managers see only whether one is set) and never logged.
 
@@ -45,9 +47,34 @@ class KioskLocked(PermissionError):
     pass
 
 
+class KioskNotConfigured(RuntimeError):
+    """KIOSK_PIN_SECRET is missing or unusable. Says what to fix; never the value."""
+    code = "KIOSK_NOT_CONFIGURED"
+
+
+MIN_SECRET_LEN = 32
+
+
+def kiosk_secret_problem(secret) -> str | None:
+    if not secret:
+        return "KIOSK_PIN_SECRET is not set"
+    if secret.startswith("replace-with") or len(secret) < MIN_SECRET_LEN:
+        return f"KIOSK_PIN_SECRET must be a random value of {MIN_SECRET_LEN}+ characters"
+    if secret == current_app.config.get("JWT_SECRET_KEY"):
+        return "KIOSK_PIN_SECRET must be different from JWT_SECRET_KEY"
+    return None
+
+
+def kiosk_secret() -> bytes:
+    secret = current_app.config.get("KIOSK_PIN_SECRET")
+    problem = kiosk_secret_problem(secret)
+    if problem:
+        raise KioskNotConfigured(f"Clock-in PINs aren't set up on the server: {problem}. Ask your administrator.")
+    return secret.encode()
+
+
 def pin_hash(comp_id: int, pin: str) -> str:
-    key = (current_app.config.get("KIOSK_PIN_SECRET") or current_app.config["JWT_SECRET_KEY"]).encode()
-    return hmac.new(key, f"{comp_id}:{pin}".encode(), hashlib.sha256).hexdigest()
+    return hmac.new(kiosk_secret(), f"{comp_id}:{pin}".encode(), hashlib.sha256).hexdigest()
 
 
 def _token_hash(token: str) -> str:

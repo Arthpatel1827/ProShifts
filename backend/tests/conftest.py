@@ -28,6 +28,7 @@ os.environ.update({
     "CELERY_BROKER_URL": TEST_REDIS,
     "CELERY_RESULT_BACKEND": TEST_REDIS,
     "JWT_SECRET_KEY": "test-only-secret-key-that-is-long-enough-1234",
+    "KIOSK_PIN_SECRET": "test-only-kiosk-pin-secret-that-is-long-enough-5678",
     "FLASK_ENV": "development",
     "EMAIL_SENDING_ENABLED": "false",
     "CORS_ORIGINS": "http://localhost:3000",

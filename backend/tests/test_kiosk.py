@@ -207,3 +207,41 @@ def test_pin_never_logged(app, client, world, caplog):
     punch(client, token, "4827")
     punch(client, token, "6153")
     assert "4827" not in caplog.text and "6153" not in caplog.text
+
+
+def test_missing_or_weak_secret_is_a_clear_config_error(app, client, world, caplog):
+    import logging
+    caplog.set_level(logging.DEBUG)
+    token = tablet(client, world)
+    good = app.config["KIOSK_PIN_SECRET"]
+    try:
+        for bad in (None, "", "replace-with-a-long-random-string", "short", app.config["JWT_SECRET_KEY"]):
+            app.config["KIOSK_PIN_SECRET"] = bad
+            res = set_pin(client, world, world.staff_a)
+            assert res.status_code == 503 and res.get_json()["code"] == "KIOSK_NOT_CONFIGURED", (bad, res.get_json())
+            assert "KIOSK_PIN_SECRET" in res.get_json()["error"]
+            assert punch(client, token, "4827").status_code == 503
+            if bad:
+                assert bad not in res.get_data(as_text=True)  # never echoes the value
+    finally:
+        app.config["KIOSK_PIN_SECRET"] = good
+    assert good not in caplog.text
+    assert set_pin(client, world, world.staff_a).status_code == 200
+
+
+def test_pin_hash_does_not_depend_on_jwt_secret(app, client, world):
+    set_pin(client, world, world.staff_a)
+    with app.app_context():
+        before = Employment.query.filter_by(user_id=world.staff_a).first().kiosk_pin_hash
+        from services.kiosk_service import pin_hash
+        old_jwt = app.config["JWT_SECRET_KEY"]
+        app.config["JWT_SECRET_KEY"] = "a-rotated-jwt-secret-that-is-long-enough-0000"
+        try:
+            assert pin_hash(world.comp_a, "4827") == before  # JWT rotation leaves PINs alone
+        finally:
+            app.config["JWT_SECRET_KEY"] = old_jwt
+
+
+def test_zero_pin_is_too_easy(client, world):
+    res = set_pin(client, world, world.staff_a, "0000")
+    assert res.status_code == 400 and "too easy" in res.get_json()["error"]

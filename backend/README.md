@@ -78,6 +78,27 @@ flask --app app.py db migrate -d migrations -m "describe the change"
 flask --app app.py db upgrade -d migrations
 ```
 
+## Clock-in PINs and the punch-in tablet
+
+Staff choose a personal 4-digit PIN in the app; a manager turns a browser at the store
+into the punch-in tablet (web: Settings → Punch-in tablets).
+
+```text
+KIOSK_PIN_SECRET  →  key for HMAC-SHA256 of each PIN  →  only the keyed hash is stored
+```
+
+- **Required for PINs.** Put a random value of 32+ characters in `backend/.env`, different
+  from `JWT_SECRET_KEY`:
+  `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+  Without it (or with the `.env.example` placeholder, a short value, or the JWT secret)
+  the app still runs, logs a warning at startup, and the PIN endpoints answer
+  `503 KIOSK_NOT_CONFIGURED` saying what to set. The value is never logged or returned.
+- **Independent of the JWT secret.** Rotating `JWT_SECRET_KEY` (signs everyone out) does
+  not affect PINs, and a copy of the database plus the JWT secret doesn't reveal PINs.
+- **Changing `KIOSK_PIN_SECRET`** makes every existing PIN stop matching: staff set a new
+  PIN in the app (Me → Clock-in PIN). Only change it if it may have leaked.
+- Never commit `backend/.env`. `.env.example` holds a placeholder only.
+
 ## Tests
 
 The suite runs against real PostgreSQL and Redis. Use throwaway instances — every table is

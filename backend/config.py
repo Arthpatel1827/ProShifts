@@ -18,9 +18,10 @@ class Config:
     JSON_SORT_KEYS = False
 
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-change-me")
-    # Key for hashing personal clock-in PINs. Defaults to the JWT secret; set it on its own
-    # so rotating the JWT secret doesn't make every staff member choose a new PIN.
-    KIOSK_PIN_SECRET = os.getenv("KIOSK_PIN_SECRET") or JWT_SECRET_KEY
+    # Key for the keyed hash of staff clock-in PINs (punch-in tablet). Its own secret, never
+    # the JWT one: rotating JWT_SECRET_KEY doesn't touch PINs. Without it, PIN features
+    # answer with a clear configuration error (services/kiosk_service.kiosk_secret).
+    KIOSK_PIN_SECRET = os.getenv("KIOSK_PIN_SECRET") or None
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(
         seconds=int(os.getenv("JWT_ACCESS_TOKEN_EXPIRES", "3600"))
     )
