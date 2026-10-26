@@ -154,7 +154,7 @@ class TimeEntryController:
             return jsonify({"error": str(e)}), 400
         
     def get_team_status(self):
-        from datetime import datetime, timezone, timedelta
+        from datetime import timezone, timedelta
         from models import Shift, ShiftAssignment, Employment, AppUser, TimeEntry
 
         user_id     = int(get_jwt_identity())

@@ -1,6 +1,6 @@
 # services/ai_service.py
 import json
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional, List, Dict, Any
 import anthropic
 from flask import current_app

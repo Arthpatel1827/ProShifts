@@ -2,7 +2,7 @@
 from flask              import jsonify, request
 from flask_jwt_extended import get_jwt_identity
 from models             import Employment, Shift, TimeEntry
-from datetime           import datetime, timezone, timedelta
+from datetime           import timezone, timedelta
 from collections        import defaultdict
 from services.rbac_service import require_location_role
 from models import Location
