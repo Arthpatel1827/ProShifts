@@ -11,6 +11,7 @@ import SwapShiftScreen from '../screens/SwapShiftScreen';
 import MySwapsScreen from '../screens/MySwapsScreen';
 import ClockInScreen from '../screens/ClockInScreen';
 import TimesheetScreen from '../screens/TimesheetScreen';
+import ClockPinScreen from '../screens/ClockPinScreen';
 import TeamStatusScreen from '../screens/TeamStatusScreen';
 import InviteStaffScreen from '../screens/admin/InviteStaffScreen';
 import TeamRolesScreen from '../screens/admin/TeamRolesScreen';
@@ -40,6 +41,7 @@ export type AppStackParamList = {
     SwapShift: undefined;
     MySwaps: undefined;
     ClockIn: undefined;
+    ClockPin: undefined;
     Timesheet: undefined;
     TeamStatus: { locationId?: number | null };
     Availability: undefined;
@@ -116,6 +118,11 @@ export default function AppStack({ initialRoute = 'Dashboard' }: Props) {
             <Stack.Screen
                 name="Timesheet"
                 component={TimesheetScreen}
+                options={{ headerShown: false }}
+            />
+            <Stack.Screen
+                name="ClockPin"
+                component={ClockPinScreen}
                 options={{ headerShown: false }}
             />
             <Stack.Screen

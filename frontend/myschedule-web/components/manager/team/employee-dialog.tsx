@@ -9,6 +9,7 @@ import { Field, FormError, Input, Select, Textarea } from "@/components/ui/form"
 import { Avatar, Badge, ErrorState, Skeleton } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { getEmployeeProfile, resendInvite, updateEmployeeProfile } from "@/lib/api/team";
+import { resetStaffPin } from "@/lib/api/kiosk";
 import { useManager } from "@/components/manager/manager-context";
 import { LoginDetails } from "./login-details";
 import { openDirectMessage } from "@/lib/api/messaging";
@@ -57,7 +58,7 @@ export function EmployeeDialog({ userId, onClose, onSaved }: Props) {
     const [resending, setResending] = useState(false);
     // Login details to hand over in person, when the resent email didn't go out.
     const [unsent, setUnsent] = useState<{ email: string; password: string } | null>(null);
-    const { user } = useManager();
+    const { user, canApprove } = useManager();
 
     // Re-seed the form whenever a (re)loaded or saved profile arrives.
     const [seeded, setSeeded] = useState(profile.data);
@@ -247,6 +248,26 @@ export function EmployeeDialog({ userId, onClose, onSaved }: Props) {
                         </div>
 
                         {unsent && <LoginDetails email={unsent.email} password={unsent.password} />}
+
+                        <div className="flex flex-wrap items-center gap-2 rounded-md bg-muted/50 px-3 py-2 text-sm" data-testid="clock-pin-status">
+                            <KeyRound className="size-4 text-muted-foreground" />
+                            <span className="flex-1">
+                                Clock-in PIN for the punch-in tablet:{" "}
+                                <span className="font-medium">{p.kiosk_pin_set ? "set" : "not set yet"}</span>
+                                <span className="block text-xs text-muted-foreground">Staff choose it in the ProShifts app. It&apos;s private: nobody else can see it.</span>
+                            </span>
+                            {p.kiosk_pin_set && canApprove && p.user_id !== user?.user_id && (
+                                <Button variant="ghost" size="sm" onClick={async () => {
+                                    try {
+                                        await resetStaffPin(p.user_id);
+                                        toast.success("PIN reset", `${name} can set a new one in the app.`);
+                                        await profile.refetch();
+                                    } catch (err) {
+                                        toast.error("Couldn't reset the PIN", err instanceof Error ? err.message : undefined);
+                                    }
+                                }}>Reset PIN</Button>
+                            )}
+                        </div>
 
                         <form id="employee-form" onSubmit={handleSubmit} className="space-y-5" noValidate>
                             <FormError message={formError} />

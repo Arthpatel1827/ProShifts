@@ -13,7 +13,7 @@ class TimeEntryService:
 
     # ── Clock in ──────────────────────────────────────────────────────────────
     def clock_in(self, *, user_id, shift_id=None, notes=None,
-                latitude=None, longitude=None, pin=None) -> TimeEntry:
+                latitude=None, longitude=None, pin=None, via_kiosk=False) -> TimeEntry:
 
         if self._get_active(user_id):
             raise ValueError("You are already clocked in. Clock out first.")
@@ -21,7 +21,14 @@ class TimeEntryService:
         company = self._get_company(user_id)
         method  = company.clock_in_method if company else "gps"
 
-        if method == "gps":
+        if via_kiosk:
+            # The store's own tablet, set up by a manager, is the proof of being at work:
+            # no phone GPS or daily PIN. Manager-only mode still applies.
+            if method == "manager_only":
+                raise ValueError("Clock-in is managed by your manager.")
+        elif method == "kiosk_pin":
+            raise ValueError("Clock in on the store's punch-in tablet with your personal PIN.")
+        elif method == "gps":
             if latitude is None or longitude is None:
                 raise ValueError("Location required to clock in.")
             if company:
@@ -352,7 +359,7 @@ class TimeEntryService:
     ) -> Company:
         company = self._approver_company(manager_user_id)
 
-        if clock_in_method and clock_in_method in ("manager_only", "gps", "qr_pin"):
+        if clock_in_method and clock_in_method in ("manager_only", "gps", "qr_pin", "kiosk_pin"):
             company.clock_in_method = clock_in_method
 
         if break_duration_mins is not None and break_duration_mins >= 0:

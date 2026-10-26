@@ -174,6 +174,7 @@ export default function ClockSettingsScreen({ navigation }: any) {
                     {[
                         { value: 'gps',         label: 'GPS Verification', description: 'Employee must be within range of the location', icon: 'location-outline' as const },
                         { value: 'qr_pin',       label: 'PIN / QR Code',   description: 'Employee enters a daily PIN at clock-in',        icon: 'keypad-outline'  as const },
+                        { value: 'kiosk_pin',    label: 'Tablet + Personal PIN', description: 'Staff punch in on the store tablet with their own PIN', icon: 'tablet-portrait-outline' as const },
                         { value: 'manager_only', label: 'Manager Only',    description: 'Only managers can clock employees in/out',       icon: 'person-outline'  as const },
                     ].map(opt => (
                         <Pressable
@@ -311,7 +312,7 @@ export default function ClockSettingsScreen({ navigation }: any) {
                 <View style={styles.summaryCard}>
                     <Text style={styles.summaryTitle}>Current Configuration</Text>
                     <Text style={styles.summaryLine}>
-                        Clock-in: {method === 'gps' ? `GPS (${gpsRadius}m radius)` : method === 'qr_pin' ? 'PIN / QR Code' : 'Manager only'}
+                        Clock-in: {method === 'gps' ? `GPS (${gpsRadius}m radius)` : method === 'qr_pin' ? 'PIN / QR Code' : method === 'kiosk_pin' ? 'Tablet + personal PIN' : 'Manager only'}
                     </Text>
                     <Text style={styles.summaryLine}>
                         Break: {breakDuration}m • {paidBreak ? 'Paid' : 'Unpaid'} • {maxBreaks === null ? 'Unlimited breaks' : `Max ${maxBreaks} break(s)`}

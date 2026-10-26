@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, Check, Crosshair, KeyRound, Loader2, Lock, MapPin, ShieldCheck, Smartphone, UserCog } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { AlertTriangle, Check, Crosshair, KeyRound, Loader2, Lock, MapPin, ShieldCheck, Smartphone, Tablet, Trash2, UserCog } from "lucide-react";
 import { useManager } from "@/components/manager/manager-context";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
@@ -11,6 +12,7 @@ import { useToast } from "@/components/ui/toast";
 import { updateLocationCoords } from "@/lib/api/locations";
 import { generatePin, getClockSettings, updateClockSettings } from "@/lib/api/settings";
 import { useQuery } from "@/lib/hooks/use-query";
+import { listKioskDevices, removeKioskDevice, setUpThisDeviceAsKiosk } from "@/lib/api/kiosk";
 import { formatDate, formatTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { ClockInMethod, ClockSettings } from "@/lib/types";
@@ -23,6 +25,7 @@ const MAX_BREAKS: (number | null)[] = [null, 1, 2, 3];
 const METHODS: { value: ClockInMethod; label: string; description: string; icon: typeof MapPin }[] = [
     { value: "gps", label: "GPS", description: "Staff clock in on their phone when they're within range of the store.", icon: MapPin },
     { value: "qr_pin", label: "Daily PIN", description: "Staff enter today's 4-digit PIN, shared at the store.", icon: KeyRound },
+    { value: "kiosk_pin", label: "Tablet + personal PIN", description: "Staff punch in on the store's tablet with their own 4-digit PIN. Phones can't clock in.", icon: Tablet },
     { value: "manager_only", label: "Manager only", description: "Staff can't clock themselves in; a manager does it for them.", icon: UserCog },
 ];
 
@@ -105,7 +108,7 @@ export default function SettingsPage() {
 
             <Card>
                 <CardHeader title="How staff clock in" />
-                <div className="grid gap-3 px-5 pb-5 sm:grid-cols-3" role="radiogroup" aria-label="Clock-in method">
+                <div className="grid gap-3 px-5 pb-5 sm:grid-cols-2 xl:grid-cols-4" role="radiogroup" aria-label="Clock-in method">
                     {METHODS.map((m) => {
                         const on = draft.clock_in_method === m.value;
                         const Icon = m.icon;
@@ -149,6 +152,10 @@ export default function SettingsPage() {
             )}
 
             {draft.clock_in_method === "qr_pin" && <PinCard expiresAt={s.pin_expires_at} tz={tz} readOnly={readOnly} onGenerated={q.refetch} savedMethod={s.clock_in_method} />}
+
+            {draft.clock_in_method !== "manager_only" && location && (
+                <TabletsCard key={location.id} locationId={location.id} locationName={location.name} readOnly={readOnly} required={draft.clock_in_method === "kiosk_pin"} />
+            )}
 
             {draft.clock_in_method === "manager_only" && (
                 <Card>
@@ -395,6 +402,85 @@ function PinCard({
                 pending={busy}
                 onConfirm={generate}
             />
+        </Card>
+    );
+}
+
+
+/** Punch-in tablets at this location. Works with every method except Manager only:
+ *  the store's own tablet, set up by a manager, stands in for phone GPS. */
+function TabletsCard({ locationId, locationName, readOnly, required }: { locationId: number; locationName: string; readOnly: boolean; required: boolean }) {
+    const toast = useToast();
+    const router = useRouter();
+    const devices = useQuery(readOnly ? null : ["kiosk-devices", locationId], () => listKioskDevices(locationId));
+    const [busy, setBusy] = useState(false);
+    const [removing, setRemoving] = useState<number | null>(null);
+
+    async function setUpHere() {
+        setBusy(true);
+        try {
+            await setUpThisDeviceAsKiosk(locationId, `${locationName} tablet`);
+            router.push("/kiosk");
+        } catch (err) {
+            toast.error("Couldn't set up this device", err instanceof Error ? err.message : undefined);
+            setBusy(false);
+        }
+    }
+
+    return (
+        <Card>
+            <CardHeader
+                title="Punch-in tablets"
+                description={`Staff tap their personal 4-digit PIN on a tablet at ${locationName}. They set the PIN in the ProShifts app (Me → Clock-in PIN); you never see it.`}
+            />
+            <div className="space-y-3 px-5 pb-5">
+                {required && !devices.loading && !devices.data?.length && (
+                    <p className="flex items-center gap-2 rounded-md bg-warning/10 px-3 py-2 text-sm text-foreground">
+                        <AlertTriangle className="size-4 text-warning" /> No tablet yet: with this method nobody can clock in until you set one up.
+                    </p>
+                )}
+                {readOnly ? (
+                    <p className="text-sm text-muted-foreground">Only owners and managers can set up tablets.</p>
+                ) : devices.error ? (
+                    <ErrorState message={devices.error.message} onRetry={devices.refetch} />
+                ) : (
+                    <ul className="divide-y divide-border rounded-md border border-border">
+                        {(devices.data ?? []).map((d) => (
+                            <li key={d.device_id} className="flex items-center gap-3 px-3 py-2 text-sm">
+                                <Tablet className="size-4 text-muted-foreground" />
+                                <span className="flex-1">{d.name}</span>
+                                <span className="text-xs text-muted-foreground">
+                                    {d.last_seen_at ? `Last used ${formatDate(`${d.last_seen_at}Z`, { month: "short", day: "numeric" })}` : "Not used yet"}
+                                </span>
+                                <Button variant="ghost" size="sm" disabled={removing === d.device_id} aria-label={`Remove ${d.name}`}
+                                    onClick={async () => {
+                                        setRemoving(d.device_id);
+                                        try {
+                                            await removeKioskDevice(d.device_id);
+                                            toast.success("Tablet removed", "It can't punch anyone in any more.");
+                                            await devices.refetch();
+                                        } catch (err) {
+                                            toast.error("Couldn't remove it", err instanceof Error ? err.message : undefined);
+                                        } finally {
+                                            setRemoving(null);
+                                        }
+                                    }}>
+                                    <Trash2 /> Remove
+                                </Button>
+                            </li>
+                        ))}
+                        {!devices.loading && !devices.data?.length && <li className="px-3 py-2 text-sm text-muted-foreground">No tablets set up.</li>}
+                    </ul>
+                )}
+                {!readOnly && (
+                    <div className="flex flex-wrap items-center gap-3">
+                        <Button onClick={setUpHere} disabled={busy}>
+                            <Tablet /> {busy ? "Setting up…" : "Use this device as the punch-in tablet"}
+                        </Button>
+                        <span className="text-xs text-muted-foreground">Open this page on the store tablet and press the button. You can sign out afterwards; the tablet keeps working.</span>
+                    </div>
+                )}
+            </div>
         </Card>
     );
 }

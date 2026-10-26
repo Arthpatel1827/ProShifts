@@ -310,6 +310,8 @@ class AdminController:
             "notes":             getattr(emp, "notes",             None),
             "hire_date":         emp.start_date.isoformat() if emp.start_date else None,
             "location_id":       emp.location_id,
+            # Whether they've set a personal clock-in PIN — never the PIN itself.
+            "kiosk_pin_set":     bool(getattr(emp, "kiosk_pin_hash", None)),
             # Joined through an emailed invite, so "Resend invite" applies.
             "invited":           _was_invited(user.user_email, emp.location_id),
         }

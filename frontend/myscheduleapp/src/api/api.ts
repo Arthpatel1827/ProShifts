@@ -176,6 +176,12 @@ export const ShiftsAPI = {
     }) => api.post('/shifts/bulk-week', body),
 };
 
+// ── Personal clock-in PIN (for the store's punch-in tablet) ───────────────────
+export const KioskAPI = {
+    pinStatus: () => api.get('/kiosk/pin'),
+    setPin: (pin: string, confirm: string) => api.put('/kiosk/pin', { pin, confirm }),
+};
+
 // ── Swaps API ──────────────────────────────────────────────────────────────────
 export const SwapsAPI = {
     // Create

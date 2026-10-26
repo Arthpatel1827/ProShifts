@@ -127,6 +127,10 @@ class Employment(db.Model):
     emergency_contact    = db.Column(Text, nullable=True)
     emergency_phone      = db.Column(Text, nullable=True)
     notes                = db.Column(Text, nullable=True)
+    # Personal 4-digit clock-in PIN for the store's punch-in tablet: a keyed hash
+    # (never the PIN), unique within the company so the tablet knows who it is.
+    kiosk_pin_hash       = db.Column(Text, nullable=True, index=True)
+    kiosk_pin_set_at     = db.Column(DateTime, nullable=True)
 
     user     = db.relationship("AppUser",  back_populates="employments")
     company  = db.relationship("Company",  back_populates="employments")
@@ -333,6 +337,26 @@ class TimeEntryAudit(db.Model):
     reason     = db.Column(Text, nullable=False)
 
     changer = db.relationship("AppUser", foreign_keys=[changed_by])
+
+
+# ── 13c. KioskDevice ──────────────────────────────────────────────────────────
+class KioskDevice(db.Model):
+    """A punch-in tablet a manager set up at a location. Staff don't sign in on it: the
+    device token (stored hashed) says which location it is."""
+    __tablename__ = "kiosk_device"
+
+    device_id       = db.Column(BigInteger, primary_key=True)
+    location_id     = db.Column(BigInteger, db.ForeignKey("location.loc_id", ondelete="CASCADE"), nullable=False, index=True)
+    name            = db.Column(Text, nullable=False)
+    token_hash      = db.Column(db.String(64), nullable=False, unique=True)
+    created_by      = db.Column(BigInteger, db.ForeignKey("app_user.user_id", ondelete="SET NULL"), nullable=True)
+    created_at      = db.Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_seen_at    = db.Column(DateTime, nullable=True)
+    revoked_at      = db.Column(DateTime, nullable=True)
+    failed_attempts = db.Column(Integer, nullable=False, default=0)
+    locked_until    = db.Column(DateTime, nullable=True)
+
+    location = db.relationship("Location")
 
 
 # ── 14. OnboardingInvite ──────────────────────────────────────────────────────

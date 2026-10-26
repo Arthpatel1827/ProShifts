@@ -62,6 +62,7 @@ def create_app():
     from routes.drops         import drops_bp
     from routes.time_off import time_off_bp
     from routes.messaging import messaging_bp
+    from routes.kiosk import router as kiosk_router
     
     app.register_blueprint(auth_router)
     app.register_blueprint(onboarding_router)
@@ -76,6 +77,7 @@ def create_app():
     app.register_blueprint(drops_bp)
     app.register_blueprint(time_off_bp)
     app.register_blueprint(messaging_bp)
+    app.register_blueprint(kiosk_router)
     
     # GraphQL
     from gql_server.graphql_server import register_graphql_route

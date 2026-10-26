@@ -36,6 +36,8 @@ export type EmployeeProfile = {
     location_id: number | null;
     /** Joined through an emailed invite, so "Resend invite" applies. */
     invited: boolean;
+    /** Has a personal clock-in PIN for the punch-in tablet (never the PIN). */
+    kiosk_pin_set?: boolean;
 };
 
 /** How an invite's login details reached the employee. temp_password is present only

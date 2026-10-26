@@ -1,5 +1,5 @@
 // GET/PUT /time-entries/settings — company-wide clock-in rules.
-export type ClockInMethod = "gps" | "qr_pin" | "manager_only";
+export type ClockInMethod = "gps" | "qr_pin" | "kiosk_pin" | "manager_only";
 
 export type ClockSettings = {
     clock_in_method: ClockInMethod;
