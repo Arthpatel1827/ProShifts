@@ -21,7 +21,7 @@ export async function removeKioskDevice(deviceId: number): Promise<void> {
  *  into an httpOnly cookie and is never kept by page scripts. */
 export async function setUpThisDeviceAsKiosk(locationId: number, name: string): Promise<void> {
     const { token } = await api.post<{ token: string }>("/kiosk/devices", { location_id: locationId, name });
-    const res = await fetch("/api/kiosk/session", {
+    const res = await fetch("/api/kiosk/activate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token }),

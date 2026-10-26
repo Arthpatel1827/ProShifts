@@ -161,7 +161,7 @@ export default function KioskScreen() {
                             ))}
                         </div>
                         {result?.kind === "error" ? (
-                            <p role="alert" className="mb-3 flex items-center gap-2 text-base font-medium text-destructive">
+                            <p role="alert" data-testid="kiosk-error" className="mb-3 flex items-center gap-2 text-base font-medium text-destructive">
                                 {result.locked ? <Lock className="size-5" /> : <XCircle className="size-5" />} {result.message}
                             </p>
                         ) : busy ? (

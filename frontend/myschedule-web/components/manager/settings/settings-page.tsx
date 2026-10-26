@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { AlertTriangle, Check, Crosshair, KeyRound, Loader2, Lock, MapPin, ShieldCheck, Smartphone, Tablet, Trash2, UserCog } from "lucide-react";
 import { useManager } from "@/components/manager/manager-context";
 import { Button } from "@/components/ui/button";
@@ -411,7 +410,6 @@ function PinCard({
  *  the store's own tablet, set up by a manager, stands in for phone GPS. */
 function TabletsCard({ locationId, locationName, readOnly, required }: { locationId: number; locationName: string; readOnly: boolean; required: boolean }) {
     const toast = useToast();
-    const router = useRouter();
     const devices = useQuery(readOnly ? null : ["kiosk-devices", locationId], () => listKioskDevices(locationId));
     const [busy, setBusy] = useState(false);
     const [removing, setRemoving] = useState<number | null>(null);
@@ -420,7 +418,8 @@ function TabletsCard({ locationId, locationName, readOnly, required }: { locatio
         setBusy(true);
         try {
             await setUpThisDeviceAsKiosk(locationId, `${locationName} tablet`);
-            router.push("/kiosk");
+            // A full page load: nothing from the manager's session stays on the shared tablet.
+            window.location.replace("/kiosk");
         } catch (err) {
             toast.error("Couldn't set up this device", err instanceof Error ? err.message : undefined);
             setBusy(false);
