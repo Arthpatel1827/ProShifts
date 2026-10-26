@@ -41,6 +41,11 @@ def create_shift():
 def bulk_create_week():
     return ctrl.bulk_create_week()
 
+@router.post("/copy")
+@jwt_required()
+def copy_shifts():
+    return ctrl.copy_shifts()
+
 @router.put("/<int:shift_id>")
 @jwt_required()
 def update_shift(shift_id):

@@ -221,6 +221,9 @@ class ShiftService:
             if not emp:
                 skipped.append({"index": idx, "reason": "Employee not active at this location"})
                 continue
+            if role_id is not None and not Role.query.filter_by(role_id=role_id, location_id=location_id).first():
+                skipped.append({"index": idx, "reason": "Role isn't defined at this location"})
+                continue
 
             try:
                 sh, sm = [int(x) for x in st_str.split(":")]
@@ -285,6 +288,125 @@ class ShiftService:
             "created_count": len(created),
             "created_ids":   created,
             "skipped":       skipped,
+        }
+
+    # ── Copy / paste ──────────────────────────────────────────────────────────
+    MAX_COPY = 500
+
+    def copy_shifts(self, *, caller_user_id, location_id, items, include_assignees=True):
+        """
+        Copy existing shifts to other dates as DRAFTS.
+
+        items: [{"shift_id": int, "date": "YYYY-MM-DD"}, ...] — each source shift is placed
+        on that local date at the same wall-clock times (overnight shifts stay overnight,
+        and DST is respected). Assigned staff are carried over only when they still pass
+        the same checks as assign_user (active here, no overlap, no approved time off);
+        otherwise the copied shift stays open and the reason is reported.
+        A shift already on the target date with the same times, role AND people is
+        skipped, so copying twice doesn't double the schedule; an open shift in the same
+        slot is filled with the copied staff instead of getting a second shift beside it.
+        """
+        self._assert_manager(caller_user_id, location_id)
+        if not isinstance(items, list) or not items:
+            raise ValueError("items must be a non-empty list")
+        if len(items) > self.MAX_COPY:
+            raise ValueError(f"Copy at most {self.MAX_COPY} shifts at once")
+
+        tz = tzu.location_tz_by_id(location_id)
+        active = {
+            e.user_id: e for e in Employment.query.filter_by(location_id=location_id, status="active").all()
+        }
+        sources = {}
+        created, filled, skipped, unassigned = [], [], [], []
+        used_open = set()
+
+        for idx, item in enumerate(items):
+            try:
+                sid = int(item["shift_id"])
+            except (KeyError, TypeError, ValueError):
+                skipped.append({"index": idx, "reason": "Missing or invalid shift_id"})
+                continue
+            target = tzu.parse_date((item or {}).get("date"))
+            if not target:
+                skipped.append({"index": idx, "shift_id": sid, "reason": "date must be YYYY-MM-DD"})
+                continue
+            if sid not in sources:
+                sources[sid] = Shift.query.get(sid)
+            src = sources[sid]
+            if not src or src.location_id != location_id or src.status == "cancelled":
+                skipped.append({"index": idx, "shift_id": sid, "reason": "Shift not found at this location"})
+                continue
+
+            s_local = tzu.to_local(src.start_time, tz)
+            e_local = tzu.to_local(src.end_time, tz)
+            start = datetime.combine(target, s_local.time(), tzinfo=tz)
+            end = datetime.combine(target + (e_local.date() - s_local.date()), e_local.time(), tzinfo=tz)
+            label = target.strftime("%a %b %d")
+
+            # Shifts already in that exact slot (same times and role).
+            same_slot = Shift.query.filter(
+                Shift.location_id == location_id,
+                Shift.status.in_(["draft", "published"]),
+                Shift.start_time == start, Shift.end_time == end,
+                Shift.role_id == src.role_id if src.role_id is not None else Shift.role_id.is_(None),
+            ).all()
+            wanted = {a.user_id for a in src.assignments} if include_assignees else set()
+            # Same slot AND same people: it's already there (copying twice changes nothing).
+            # Several people on identical slots are separate shifts, so people are compared too.
+            if any({a.user_id for a in e.assignments} == wanted for e in same_slot):
+                skipped.append({"index": idx, "shift_id": sid, "date": target.isoformat(),
+                                "reason": f"An identical shift is already on {label}"})
+                continue
+
+            # An open shift in that slot gets the staff instead of a second copy beside it.
+            open_slot = next((e for e in same_slot if not e.assignments and e.shift_id not in used_open), None) if wanted else None
+            if open_slot is not None:
+                shift = open_slot
+                used_open.add(shift.shift_id)
+            else:
+                shift = Shift(
+                    location_id=location_id, role_id=src.role_id,
+                    start_time=start, end_time=end,
+                    break_minutes=src.break_minutes or 0, notes=src.notes,
+                    status="draft", created_by=caller_user_id,
+                )
+                db.session.add(shift)
+                db.session.flush()
+                created.append(shift.shift_id)
+
+            if not include_assignees:
+                continue
+            time_off = self._approved_timeoff_map(location_id, target, target + timedelta(days=1))
+            for a in src.assignments:
+                emp = active.get(a.user_id)
+                name = (emp.user.display_name or emp.user.username) if emp and emp.user else None
+                reason = None
+                if not emp:
+                    reason = "No longer an active employee here"
+                elif self._is_on_timeoff(time_off, a.user_id, target):
+                    reason = "Has approved time off"
+                elif self._has_overlap(a.user_id, start, end):
+                    reason = "Already has a shift that overlaps"
+                if reason:
+                    unassigned.append({"shift_id": shift.shift_id, "user_id": a.user_id, "name": name,
+                                       "date": target.isoformat(), "reason": reason})
+                    continue
+                db.session.add(ShiftAssignment(shift_id=shift.shift_id, user_id=a.user_id, assigned_by=caller_user_id))
+                db.session.flush()
+                if open_slot is not None and shift.shift_id not in filled:
+                    filled.append(shift.shift_id)
+
+        db.session.commit()
+        if created or filled:
+            emit_shift_updated(location_id, (created or filled)[-1], "created")
+        return {
+            "created_count": len(created),
+            "created_ids": created,
+            # Existing open shifts in the same slot that received the copied staff.
+            "filled_count": len(filled),
+            "filled_ids": filled,
+            "skipped": skipped,
+            "unassigned": unassigned,
         }
 
     def _approved_timeoff_map(self, location_id, start, end):

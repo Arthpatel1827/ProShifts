@@ -128,6 +128,27 @@ class ShiftController:
             import traceback; traceback.print_exc()
             return jsonify({"error": "Something went wrong"}), 500
 
+    # ── Copy / paste ──────────────────────────────────────────────────────────
+    def copy_shifts(self):
+        caller_id = int(get_jwt_identity())
+        data = request.get_json(silent=True) or {}
+        try:
+            location_id = int(data.get("location_id"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "location_id is required"}), 400
+        try:
+            result = svc.copy_shifts(
+                caller_user_id=caller_id,
+                location_id=location_id,
+                items=data.get("items"),
+                include_assignees=bool(data.get("include_assignees", True)),
+            )
+            return jsonify(result), 201
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
     def roles_with_staff(self):
         caller_id   = int(get_jwt_identity())
         location_id = request.args.get("location_id", type=int)
