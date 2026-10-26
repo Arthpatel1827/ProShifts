@@ -96,3 +96,24 @@ def test_rate_limits_are_per_user_not_per_server_ip(app, world):
         assert rate_limit_key() == f"user:{world.owner_b}"
     with app.test_request_context("/auth/login", environ_base={"REMOTE_ADDR": "10.0.0.5"}):
         assert rate_limit_key() == "10.0.0.5"
+
+
+def test_only_owners_and_managers_change_clock_in_rules(app, client, world):
+    from models import Company
+    url = "/time-entries/settings"
+    # Staff could previously switch GPS off or mint the daily PIN and clock in from anywhere.
+    assert client.put(url, headers=world.headers(world.staff_a), json={"clock_in_method": "manager_only"}).status_code == 403
+    assert client.post(url + "/generate-pin", headers=world.headers(world.staff_a)).status_code == 403
+    with app.app_context():
+        assert Company.query.get(world.comp_a).clock_in_method == "gps"
+        assert Company.query.get(world.comp_a).clock_in_pin is None
+
+    res = client.put(url, headers=world.headers(world.manager_a), json={"clock_in_method": "qr_pin"})
+    assert res.status_code == 200 and res.get_json()["settings"]["clock_in_method"] == "qr_pin"
+    pin = client.post(url + "/generate-pin", headers=world.headers(world.owner_a))
+    assert pin.status_code == 200 and len(pin.get_json()["pin"]) == 4
+    # Another company's owner changes their own company, never this one.
+    client.put(url, headers=world.headers(world.owner_b), json={"clock_in_method": "manager_only"})
+    with app.app_context():
+        assert Company.query.get(world.comp_a).clock_in_method == "qr_pin"
+        assert Company.query.get(world.comp_b).clock_in_method == "manager_only"

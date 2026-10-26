@@ -339,9 +339,7 @@ class TimeEntryService:
         paid_break:          Optional[bool] = None,
         gps_radius_meters:   Optional[int]  = None,
     ) -> Company:
-        company = self._get_company(manager_user_id)
-        if not company:
-            raise ValueError("No company found.")
+        company = self._approver_company(manager_user_id)
 
         if clock_in_method and clock_in_method in ("manager_only", "gps", "qr_pin"):
             company.clock_in_method = clock_in_method
@@ -363,9 +361,8 @@ class TimeEntryService:
 
     # ── Generate daily PIN ────────────────────────────────────────────────────
     def generate_pin(self, manager_user_id: int) -> str:
-        company = self._get_company(manager_user_id)
-        if not company:
-            raise ValueError("No company found.")
+        # Staff must never see the PIN: it's what proves they're at the store.
+        company = self._approver_company(manager_user_id)
         pin = f"{secrets.randbelow(9000) + 1000}"
         company.clock_in_pin     = self._hash_pin(pin)
         company.pin_generated_at = datetime.now(timezone.utc)
@@ -424,6 +421,16 @@ class TimeEntryService:
         return TimeEntry.query.filter_by(
             user_id=user_id, clock_out=None
         ).first()
+
+    @staticmethod
+    def _approver_company(user_id: int) -> Company:
+        """The company an owner/manager administers. Clock-in rules and the daily PIN are
+        company-wide controls, so staff and supervisors can't change or see them."""
+        from services.rbac_service import APPROVER_ROLES, company_role_employment
+        emp = company_role_employment(user_id, APPROVER_ROLES)
+        if not emp or not emp.company:
+            raise PermissionError("Only an owner or manager can change clock-in settings.")
+        return emp.company
 
     @staticmethod
     def _get_company(user_id: int) -> Optional[Company]:

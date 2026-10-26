@@ -138,6 +138,8 @@ class TimeEntryController:
                 "message": "Clock settings updated",
                 "settings": svc.get_clock_settings(manager_id),
             }), 200
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
 
@@ -150,6 +152,8 @@ class TimeEntryController:
                 "pin":     pin,
                 "expires": "24 hours",
             }), 200
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         
