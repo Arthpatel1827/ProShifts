@@ -13,15 +13,16 @@ so they had no shared implementation to reuse):
     not in the past, and no overlaps inside the proposal itself.
 """
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 
 from flask import current_app
 
-from ai.schemas import DAYS, ScheduleRecommendation, parse_hhmm
+from ai.schemas import ScheduleRecommendation, parse_hhmm
 from extensions import db
 from models import Availability, Employment, Location, Role, Shift, ShiftAssignment
 from services.shift_service import ShiftService
 from utils import timezones as tzu
+from utils.availability import availability_gaps  # shared with manual/bulk/copy assignment
 
 MIN_SHIFT_HOURS = 1
 MAX_SHIFT_HOURS = 16
@@ -77,29 +78,6 @@ class Result:
             "failures": self.failures,
             "warnings": self.warnings,
         }
-
-
-def availability_gaps(windows_by_day: dict, start_local: datetime, end_local: datetime) -> list[str]:
-    """Days/times of [start_local, end_local) not covered by an availability window.
-    Availability is local wall-clock per weekday; an overnight shift must be covered on
-    both days (until midnight, then from midnight)."""
-    gaps = []
-    cur = start_local
-    while cur < end_local:
-        next_midnight = datetime.combine(cur.date() + timedelta(days=1), time.min, tzinfo=cur.tzinfo)
-        seg_end = min(end_local, next_midnight)
-        seg_start_t = cur.time()
-        reaches_midnight = seg_end == next_midnight
-        seg_end_t = time(23, 59) if reaches_midnight else seg_end.time()
-        day = DAYS[cur.weekday()]
-        covered = any(
-            w_start <= seg_start_t and (w_end >= seg_end_t)
-            for (w_start, w_end) in windows_by_day.get(day, [])
-        )
-        if not covered:
-            gaps.append(f"{day.title()} {seg_start_t.strftime('%H:%M')}–{'24:00' if reaches_midnight else seg_end_t.strftime('%H:%M')}")
-        cur = seg_end
-    return gaps
 
 
 class ScheduleValidator:

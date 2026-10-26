@@ -35,6 +35,7 @@ export function BulkAddDialog({ open, onOpenChange, locationId, weekStart, tz, r
     const [days, setDays] = useState<Set<number>>(new Set());
     const [people, setPeople] = useState<Set<number>>(new Set());
     const [query, setQuery] = useState("");
+    const [includeUnavailable, setIncludeUnavailable] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [pending, setPending] = useState(false);
     const [result, setResult] = useState<BulkResult | null>(null);
@@ -48,6 +49,7 @@ export function BulkAddDialog({ open, onOpenChange, locationId, weekStart, tz, r
             setDays(new Set());
             setPeople(new Set());
             setQuery("");
+            setIncludeUnavailable(false);
             setError(null);
             setResult(null);
         }
@@ -109,7 +111,8 @@ export function BulkAddDialog({ open, onOpenChange, locationId, weekStart, tz, r
                     end_time: end,
                     days: [...days].sort(),
                     break_minutes: brk,
-                }))
+                })),
+                includeUnavailable
             );
             setResult(res);
             onCreated();
@@ -275,6 +278,21 @@ export function BulkAddDialog({ open, onOpenChange, locationId, weekStart, tz, r
                             </div>
                         )}
                     </div>
+
+                    <label className="flex items-start gap-2 text-sm">
+                        <input
+                            type="checkbox"
+                            checked={includeUnavailable}
+                            onChange={(e) => setIncludeUnavailable(e.target.checked)}
+                            className="mt-0.5 size-4 accent-primary"
+                        />
+                        <span>
+                            Include people outside their availability
+                            <span className="block text-xs text-muted-foreground">
+                                Off: anyone not available on a day is skipped and listed afterwards. Time off and double-booking are always skipped.
+                            </span>
+                        </span>
+                    </label>
                 </div>
             )}
         </Dialog>

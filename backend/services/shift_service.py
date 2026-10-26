@@ -6,12 +6,18 @@ from extensions import db
 from models import Shift, ShiftAssignment, AppUser, Location, Employment, Role
 from services.notification_service import NotificationService
 from utils import timezones as tzu
+from utils.availability import availability_conflict
 from utils.socket_events import (
     emit_shift_updated, emit_shift_assigned,
     emit_schedule_published, emit_labor_cost_update,
 )
 
 notif_svc = NotificationService()
+
+
+class OutsideAvailability(ValueError):
+    """The person isn't available then. Managers may override (allow_outside_availability)."""
+    code = "OUTSIDE_AVAILABILITY"
 
 
 class ShiftService:
@@ -119,7 +125,7 @@ class ShiftService:
         return shift
 
     # ── Assign ────────────────────────────────────────────────────────────────
-    def assign_user(self, *, shift_id, user_id, caller_user_id):
+    def assign_user(self, *, shift_id, user_id, caller_user_id, allow_outside_availability=False):
         shift = Shift.query.get(shift_id)
         if not shift:
             raise ValueError("Shift not found")
@@ -141,6 +147,10 @@ class ShiftService:
         time_off = self._approved_timeoff_map(shift.location_id, day, day + timedelta(days=1))
         if self._is_on_timeoff(time_off, user_id, day):
             raise ValueError("This employee has approved time off on this day")
+        if not allow_outside_availability:
+            conflict = availability_conflict(user_id, shift.location_id, shift.start_time, shift.end_time)
+            if conflict:
+                raise OutsideAvailability(conflict)
         assignment = ShiftAssignment(
             shift_id=shift_id, user_id=user_id, assigned_by=caller_user_id
         )
@@ -172,7 +182,7 @@ class ShiftService:
         return True
 
     # ── Bulk week-wise create ─────────────────────────────────────────────────
-    def bulk_create_week(self, *, caller_user_id, location_id, week_start, rows):
+    def bulk_create_week(self, *, caller_user_id, location_id, week_start, rows, allow_outside_availability=False):
         """
         Create shifts across a week from role-grouped rows.
 
@@ -263,6 +273,18 @@ class ShiftService:
                     })
                     continue
 
+                # Conflict: outside their availability (unless the manager chose to include them)
+                if not allow_outside_availability:
+                    conflict = availability_conflict(user_id, location_id, start_time, end_time)
+                    if conflict:
+                        skipped.append({
+                            "index": idx, "user_id": user_id,
+                            "day": day_date.strftime("%a %b %d"),
+                            "reason": conflict,
+                            "code": OutsideAvailability.code,
+                        })
+                        continue
+
                 shift = Shift(
                     location_id=location_id,
                     role_id=role_id,
@@ -293,7 +315,7 @@ class ShiftService:
     # ── Copy / paste ──────────────────────────────────────────────────────────
     MAX_COPY = 500
 
-    def copy_shifts(self, *, caller_user_id, location_id, items, include_assignees=True):
+    def copy_shifts(self, *, caller_user_id, location_id, items, include_assignees=True, allow_outside_availability=False):
         """
         Copy existing shifts to other dates as DRAFTS.
 
@@ -387,6 +409,8 @@ class ShiftService:
                     reason = "Has approved time off"
                 elif self._has_overlap(a.user_id, start, end):
                     reason = "Already has a shift that overlaps"
+                elif not allow_outside_availability:
+                    reason = availability_conflict(a.user_id, location_id, start, end)
                 if reason:
                     unassigned.append({"shift_id": shift.shift_id, "user_id": a.user_id, "name": name,
                                        "date": target.isoformat(), "reason": reason})

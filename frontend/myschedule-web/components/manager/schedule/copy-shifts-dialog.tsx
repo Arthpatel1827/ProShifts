@@ -33,6 +33,7 @@ type Props = {
 export function CopyShiftsDialog({ request, onClose, locationId, weekStart, tz, names, onCopied }: Props) {
     const [dates, setDates] = useState<Set<string>>(new Set());
     const [withStaff, setWithStaff] = useState(true);
+    const [includeUnavailable, setIncludeUnavailable] = useState(false);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [result, setResult] = useState<CopyResult | null>(null);
@@ -43,6 +44,7 @@ export function CopyShiftsDialog({ request, onClose, locationId, weekStart, tz, 
         setCurrent(request);
         setDates(new Set());
         setWithStaff(true);
+        setIncludeUnavailable(false);
         setError(null);
         setResult(null);
     }
@@ -65,7 +67,7 @@ export function CopyShiftsDialog({ request, onClose, locationId, weekStart, tz, 
         setPending(true);
         setError(null);
         try {
-            const res = await copyShifts(locationId, items, withStaff);
+            const res = await copyShifts(locationId, items, withStaff, includeUnavailable);
             setResult(res);
             onCopied();
         } catch (err) {
@@ -172,9 +174,20 @@ export function CopyShiftsDialog({ request, onClose, locationId, weekStart, tz, 
                             <span>
                                 Copy assigned staff too
                                 <span className="block text-xs text-muted-foreground">
-                                    Anyone on time off, double-booked or no longer active is left off, and that shift stays open.
+                                    Anyone on time off, double-booked, outside their availability or no longer active is left off, and that shift stays open.
                                 </span>
                             </span>
+                        </label>
+                    )}
+                    {assignedCount > 0 && withStaff && (
+                        <label className="ml-6 flex items-start gap-2 text-sm">
+                            <input
+                                type="checkbox"
+                                checked={includeUnavailable}
+                                onChange={(e) => setIncludeUnavailable(e.target.checked)}
+                                className="mt-0.5 size-4 accent-primary"
+                            />
+                            <span>Keep staff on even if it&apos;s outside their availability</span>
                         </label>
                     )}
                 </div>

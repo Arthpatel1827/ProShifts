@@ -1,4 +1,4 @@
-import { api, qs } from "./client";
+import { ApiError, api, qs } from "./client";
 import type { Shift, LaborCost, RoleWithStaff, ShiftInput, ShiftStatus } from "@/lib/types";
 
 export async function listShifts(
@@ -36,8 +36,14 @@ export async function cancelShift(shiftId: number): Promise<Shift> {
     return res.shift;
 }
 
-export async function assignUser(shiftId: number, userId: number): Promise<void> {
-    await api.post(`/shifts/${shiftId}/assign`, { user_id: userId });
+/** Rejected with code OUTSIDE_AVAILABILITY (409) when the person isn't available then;
+ *  call again with allowOutsideAvailability once the manager confirms. */
+export async function assignUser(shiftId: number, userId: number, allowOutsideAvailability = false): Promise<void> {
+    await api.post(`/shifts/${shiftId}/assign`, { user_id: userId, allow_outside_availability: allowOutsideAvailability });
+}
+
+export function isOutsideAvailability(err: unknown): err is ApiError {
+    return err instanceof ApiError && err.code === "OUTSIDE_AVAILABILITY";
 }
 
 export async function unassignUser(shiftId: number, userId: number): Promise<void> {
@@ -75,12 +81,17 @@ export type BulkRow = {
 export type BulkResult = {
     created_count: number;
     created_ids: number[];
-    skipped: { index: number; user_id?: number; day?: string; reason: string }[];
+    skipped: { index: number; user_id?: number; day?: string; reason: string; code?: string }[];
 };
 
 /** Creates one draft shift per person per selected day; conflicts are skipped and reported. */
-export function bulkCreateWeek(locationId: number, weekStart: string, rows: BulkRow[]): Promise<BulkResult> {
-    return api.post<BulkResult>("/shifts/bulk-week", { location_id: locationId, week_start: weekStart, rows });
+export function bulkCreateWeek(locationId: number, weekStart: string, rows: BulkRow[], allowOutsideAvailability = false): Promise<BulkResult> {
+    return api.post<BulkResult>("/shifts/bulk-week", {
+        location_id: locationId,
+        week_start: weekStart,
+        rows,
+        allow_outside_availability: allowOutsideAvailability,
+    });
 }
 
 export type CopyResult = {
@@ -98,11 +109,13 @@ export type CopyResult = {
 export function copyShifts(
     locationId: number,
     items: { shift_id: number; date: string }[],
-    includeAssignees: boolean
+    includeAssignees: boolean,
+    allowOutsideAvailability = false
 ): Promise<CopyResult> {
     return api.post<CopyResult>("/shifts/copy", {
         location_id: locationId,
         items,
         include_assignees: includeAssignees,
+        allow_outside_availability: allowOutsideAvailability,
     });
 }

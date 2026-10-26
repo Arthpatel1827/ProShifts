@@ -2,11 +2,11 @@
 
 import { useMemo, useState } from "react";
 import { MoonStar } from "lucide-react";
-import { Dialog } from "@/components/ui/dialog";
+import { ConfirmDialog, Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Field, FormError, Input, Select, Textarea } from "@/components/ui/form";
 import { useToast } from "@/components/ui/toast";
-import { assignUser, createShift, updateShift } from "@/lib/api/shifts";
+import { assignUser, createShift, isOutsideAvailability, updateShift } from "@/lib/api/shifts";
 import { addDaysToKey, dateKeyIn, formatHours, naiveLocalIso, timeIn, todayKey } from "@/lib/format";
 import type { RoleWithStaff, Shift } from "@/lib/types";
 
@@ -145,6 +145,40 @@ export function ShiftFormDialog({ open, onOpenChange, locationId, roles, shift, 
         return Object.keys(next).length === 0;
     }
 
+    // The shift was created but the chosen person is outside their availability.
+    const [pendingAssign, setPendingAssign] = useState<{ shift: Shift; userId: number; message: string } | null>(null);
+
+    function finish(saved: Shift) {
+        onSaved(saved);
+        onOpenChange(false);
+    }
+
+    async function assignAnyway() {
+        if (!pendingAssign) return;
+        const { shift: created, userId } = pendingAssign;
+        setSaving(true);
+        try {
+            await assignUser(created.shift_id, userId, true);
+            toast.success("Shift created and assigned");
+            setPendingAssign(null);
+            finish({ ...created, assignments: [{ user_id: userId, assigned_at: new Date().toISOString() }] });
+        } catch (err) {
+            setPendingAssign(null);
+            toast.error("Shift created, but not assigned", err instanceof Error ? err.message : undefined);
+            finish(created);
+        } finally {
+            setSaving(false);
+        }
+    }
+
+    function leaveOpen() {
+        if (!pendingAssign) return;
+        toast.info("Shift created without anyone assigned", "Assign someone from the shift when you're ready.");
+        const created = pendingAssign.shift;
+        setPendingAssign(null);
+        finish(created);
+    }
+
     async function handleSubmit(e: React.FormEvent) {
         e.preventDefault();
         setFormError(null);
@@ -174,6 +208,11 @@ export function ShiftFormDialog({ open, onOpenChange, locationId, roles, shift, 
                         };
                         toast.success("Shift created and assigned");
                     } catch (err) {
+                        if (isOutsideAvailability(err)) {
+                            // Ask before assigning; the shift itself is already saved.
+                            setPendingAssign({ shift: saved, userId: Number(form.userId), message: err.message });
+                            return;
+                        }
                         // The shift exists; only the assignment was refused (e.g. overlap or time off).
                         toast.error(
                             "Shift created, but not assigned",
@@ -184,8 +223,7 @@ export function ShiftFormDialog({ open, onOpenChange, locationId, roles, shift, 
                     toast.success("Draft shift created", "Assign someone and publish the week when you're ready.");
                 }
             }
-            onSaved(saved);
-            onOpenChange(false);
+            finish(saved);
         } catch (err) {
             setFormError(err instanceof Error ? err.message : "Couldn't save the shift.");
         } finally {
@@ -326,6 +364,15 @@ export function ShiftFormDialog({ open, onOpenChange, locationId, roles, shift, 
                     />
                 </Field>
             </form>
+            <ConfirmDialog
+                open={!!pendingAssign}
+                onOpenChange={(o) => !o && !saving && leaveOpen()}
+                title="Assign anyway?"
+                description={`The shift was created. ${pendingAssign?.message ?? ""}. Assign them anyway, or leave the shift open?`}
+                confirmLabel="Assign anyway"
+                pending={saving}
+                onConfirm={assignAnyway}
+            />
         </Dialog>
     );
 }

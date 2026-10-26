@@ -2,7 +2,7 @@
 from datetime import datetime
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
-from services.shift_service import ShiftService
+from services.shift_service import OutsideAvailability, ShiftService
 from services.rbac_service import require_location_role
 
 svc = ShiftService()
@@ -118,6 +118,7 @@ class ShiftController:
                 location_id=location_id,
                 week_start=week_start,
                 rows=rows,
+                allow_outside_availability=bool(data.get("allow_outside_availability")),
             )
             return jsonify(result), 201
         except PermissionError as e:
@@ -142,6 +143,7 @@ class ShiftController:
                 location_id=location_id,
                 items=data.get("items"),
                 include_assignees=bool(data.get("include_assignees", True)),
+                allow_outside_availability=bool(data.get("allow_outside_availability")),
             )
             return jsonify(result), 201
         except PermissionError as e:
@@ -170,10 +172,14 @@ class ShiftController:
         if not user_id:
             return jsonify({"error": "user_id is required"}), 400
         try:
-            svc.assign_user(shift_id=shift_id, user_id=user_id, caller_user_id=caller_id)
+            svc.assign_user(shift_id=shift_id, user_id=user_id, caller_user_id=caller_id,
+                            allow_outside_availability=bool(data.get("allow_outside_availability")))
             return jsonify({"message": "User assigned successfully"}), 200
         except PermissionError as e:
             return jsonify({"error": str(e)}), 403
+        except OutsideAvailability as e:
+            # The client can confirm and retry with allow_outside_availability=true.
+            return jsonify({"error": str(e), "code": e.code}), 409
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
 

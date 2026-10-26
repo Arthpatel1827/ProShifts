@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/form";
 import { Avatar, Badge } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
-import { assignUser, cancelShift, unassignUser } from "@/lib/api/shifts";
+import { assignUser, cancelShift, isOutsideAvailability, unassignUser } from "@/lib/api/shifts";
 import { createShiftThread } from "@/lib/api/messaging";
 import { formatDate, formatHours, formatTimeRange, shiftHours } from "@/lib/format";
 import { shiftStatusTone } from "@/lib/theme/tokens";
@@ -32,6 +32,8 @@ export function ShiftDetailDialog({ shift, tz, onOpenChange, roles, names, onEdi
     const [assignee, setAssignee] = useState("");
     const [busy, setBusy] = useState<string | null>(null);
     const [confirmCancel, setConfirmCancel] = useState(false);
+    // Set when the API says the person isn't available then; the manager may assign anyway.
+    const [availabilityWarning, setAvailabilityWarning] = useState<{ userId: number; message: string } | null>(null);
 
     const candidates = useMemo(() => {
         if (!shift) return [];
@@ -63,16 +65,29 @@ export function ShiftDetailDialog({ shift, tz, onOpenChange, roles, names, onEdi
         }
     }
 
-    async function handleAssign() {
-        if (!shift || !assignee) return;
-        const userId = Number(assignee);
-        const ok = await run("assign", () => assignUser(shift.shift_id, userId), `${names.get(userId) ?? "Employee"} assigned`);
-        if (ok !== undefined) {
+    async function handleAssign(override = false, forUser?: number) {
+        if (!shift) return;
+        const userId = forUser ?? Number(assignee);
+        if (!userId) return;
+        setBusy("assign");
+        try {
+            await assignUser(shift.shift_id, userId, override);
+            toast.success(`${names.get(userId) ?? "Employee"} assigned`);
             setAssignee("");
+            setAvailabilityWarning(null);
             onChanged({
                 ...shift,
                 assignments: [...shift.assignments, { user_id: userId, assigned_at: new Date().toISOString() }],
             });
+        } catch (err) {
+            if (!override && isOutsideAvailability(err)) {
+                setAvailabilityWarning({ userId, message: err.message });
+            } else {
+                setAvailabilityWarning(null);
+                toast.error("That didn't work", err instanceof Error ? err.message : undefined);
+            }
+        } finally {
+            setBusy(null);
         }
     }
 
@@ -214,7 +229,7 @@ export function ShiftDetailDialog({ shift, tz, onOpenChange, roles, names, onEdi
                                         </option>
                                     ))}
                                 </Select>
-                                <Button onClick={handleAssign} disabled={!assignee || !!busy} className="h-auto">
+                                <Button onClick={() => handleAssign()} disabled={!assignee || !!busy} className="h-auto">
                                     <UserPlus /> {busy === "assign" ? "Assigning…" : "Assign"}
                                 </Button>
                             </div>
@@ -239,6 +254,16 @@ export function ShiftDetailDialog({ shift, tz, onOpenChange, roles, names, onEdi
                     )}
                 </div>
             </Dialog>
+
+            <ConfirmDialog
+                open={!!availabilityWarning}
+                onOpenChange={(o) => !o && setAvailabilityWarning(null)}
+                title={`Assign ${availabilityWarning ? names.get(availabilityWarning.userId) ?? "them" : "them"} anyway?`}
+                description={`${availabilityWarning?.message ?? ""}. Check with them before assigning.`}
+                confirmLabel="Assign anyway"
+                pending={busy === "assign"}
+                onConfirm={() => availabilityWarning && handleAssign(true, availabilityWarning.userId)}
+            />
 
             <ConfirmDialog
                 open={confirmCancel}
