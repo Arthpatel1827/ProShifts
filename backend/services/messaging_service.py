@@ -108,6 +108,11 @@ class MessagingService:
                 db.session.delete(m)
             db.session.commit()
             self._kick_sockets(user_id)
+            try:
+                from routes.sockets import leave_location_rooms
+                leave_location_rooms(user_id, location_id)
+            except Exception:
+                pass
             return
         self.sync_general(location_id)
 

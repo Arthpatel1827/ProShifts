@@ -8,15 +8,9 @@ svc = MessagingService()
 
 
 def _emit_to_members(channel_id, event, payload):
-    """Deliver to each CURRENT member's own room. A channel room could still hold the
-    socket of someone just removed; personal rooms can't leak to them."""
-    try:
-        from extensions import socketio
-        from models import ChannelMember
-        for m in ChannelMember.query.filter_by(channel_id=channel_id).all():
-            socketio.emit(event, payload, room=f"user:{m.user_id}")
-    except Exception:
-        pass
+    # Each current member's own room only (see utils/realtime.py).
+    from utils.realtime import emit_to_channel_members
+    emit_to_channel_members(channel_id, event, payload)
 
 
 class MessagingController:

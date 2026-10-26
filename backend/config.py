@@ -37,7 +37,9 @@ class Config:
     CELERY_ACCEPT_CONTENT = ["json"]
     CELERY_TIMEZONE = "UTC"
 
-    SOCKETIO_MESSAGE_QUEUE = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    # Redis pub/sub so several API processes (and Celery) share socket events. Set
+    # SOCKETIO_MESSAGE_QUEUE to an empty value for a single process (the tests do).
+    SOCKETIO_MESSAGE_QUEUE = os.getenv("SOCKETIO_MESSAGE_QUEUE", os.getenv("REDIS_URL", "redis://localhost:6379/0")) or None
     RATELIMIT_STORAGE_URI = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     # Per signed-in user (or per IP when anonymous). The schedule and dashboard make ~10
     # calls per page plus refreshes, so the old 50/hour locked managers out mid-task.

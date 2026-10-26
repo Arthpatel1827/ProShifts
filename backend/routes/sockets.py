@@ -22,6 +22,15 @@ def leave_channel_rooms(user_id: int, channel_id: int | None = None):
             pass
 
 
+def leave_location_rooms(user_id: int, location_id: int):
+    """Deactivated at a location: stop that location's schedule events straight away."""
+    for sid in list(_SIDS.get(user_id, ())):
+        try:
+            socketio.server.leave_room(sid, f"location:{location_id}", namespace="/")
+        except Exception:
+            pass
+
+
 def _socket_user_id():
     # Flask-SocketIO keeps `session` per connection; set once the handshake is verified.
     return session.get("socket_user_id")
@@ -112,31 +121,29 @@ def register_socket_handlers():
         if channel_id:
             leave_room(f"channel_{channel_id}")
 
-    @socketio.on("typing:start")
-    def handle_typing_start(data):
+    def _typing(data, is_typing):
+        # Membership is checked on every event, and the indicator goes to current members
+        # only (never to a shared room a removed member's socket might still be in). The
+        # name comes from the account, not from the client.
         data       = data or {}
         channel_id = data.get("channel_id")
-        user_name  = str(data.get("user_name", "Someone"))[:80]
         user_id    = _socket_user_id()
-        if channel_id and user_id and ChannelMember.query.filter_by(
-            channel_id=channel_id, user_id=user_id
-        ).first():
-            emit("typing", {
-                "channel_id": channel_id,
-                "user_name":  user_name,
-                "is_typing":  True,
-            }, room=f"channel_{channel_id}", include_self=False)
+        if not (channel_id and user_id) or not str(channel_id).isdigit():
+            return
+        if not ChannelMember.query.filter_by(channel_id=int(channel_id), user_id=user_id).first():
+            return
+        user = AppUser.query.get(user_id)
+        from utils.realtime import emit_to_channel_members
+        emit_to_channel_members(int(channel_id), "typing", {
+            "channel_id": int(channel_id),
+            "user_name":  (user.display_name or user.username) if user else "Someone",
+            "is_typing":  is_typing,
+        }, exclude_user_id=user_id)
+
+    @socketio.on("typing:start")
+    def handle_typing_start(data):
+        _typing(data, True)
 
     @socketio.on("typing:stop")
     def handle_typing_stop(data):
-        data       = data or {}
-        channel_id = data.get("channel_id")
-        user_id    = _socket_user_id()
-        if channel_id and user_id and ChannelMember.query.filter_by(
-            channel_id=channel_id, user_id=user_id
-        ).first():
-            emit("typing", {
-                "channel_id": channel_id,
-                "user_name":  data.get("user_name", "Someone"),
-                "is_typing":  False,
-            }, room=f"channel_{channel_id}", include_self=False)
+        _typing(data, False)
