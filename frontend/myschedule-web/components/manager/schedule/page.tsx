@@ -1,11 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Plus, Send } from "lucide-react";
+import { Plus, Send, Sparkles } from "lucide-react";
 import { WeekNav } from "@/components/manager/schedule/week-nav";
 import { WeekGrid } from "@/components/manager/schedule/week-grid";
 import { ShiftFormDialog } from "@/components/manager/schedule/shift-form-dialog";
 import { ShiftDetailDialog } from "@/components/manager/schedule/shift-detail-dialog";
+import { ScheduleCopilotDialog } from "@/components/manager/ai/schedule-copilot-dialog";
 import { useManager } from "@/components/manager/manager-context";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
@@ -45,6 +46,7 @@ export default function SchedulePage() {
     const [selected, setSelected] = useState<Shift | null>(null);
     const [confirmPublish, setConfirmPublish] = useState(false);
     const [publishing, setPublishing] = useState(false);
+    const [copilotOpen, setCopilotOpen] = useState(false);
 
     const names = useMemo(() => {
         const map = new Map<number, string>();
@@ -104,6 +106,9 @@ export default function SchedulePage() {
                 />
 
                 <div className="flex flex-wrap items-center gap-2">
+                    <Button variant="outline" size="lg" onClick={() => setCopilotOpen(true)} className="border-primary/30 text-primary hover:bg-primary/5 hover:text-primary">
+                        <Sparkles /> AI Schedule Copilot
+                    </Button>
                     <Button variant="outline" size="lg" onClick={() => openCreate(todayKey(tz) > weekKey ? todayKey(tz) : weekKey)}>
                         <Plus /> Add shift
                     </Button>
@@ -156,6 +161,20 @@ export default function SchedulePage() {
                     defaultDate={newDate}
                     tz={tz}
                     onSaved={upsert}
+                />
+            )}
+
+            {locationId && (
+                <ScheduleCopilotDialog
+                    open={copilotOpen}
+                    onOpenChange={setCopilotOpen}
+                    locationId={locationId}
+                    weekStart={weekKey}
+                    roles={roles.data ?? []}
+                    onApplied={() => {
+                        void shifts.refetch();
+                        void labor.refetch();
+                    }}
                 />
             )}
 

@@ -14,6 +14,7 @@ import {
     Users,
 } from "lucide-react";
 import { useManager } from "@/components/manager/manager-context";
+import { InsightsCard } from "@/components/manager/ai/insights-card";
 import { Avatar, Badge, Card, CardHeader, EmptyState, ErrorState, Skeleton, Stat } from "@/components/ui/primitives";
 import { getLaborCost, listShifts, rolesWithStaff } from "@/lib/api/shifts";
 import { getTeamStatus } from "@/lib/api/team";
@@ -133,6 +134,8 @@ export default function DashboardPage() {
                 drafts={drafts.length}
                 pending={pending?.total ?? 0}
             />
+
+            {locationId && <InsightsCard locationId={locationId} weekStart={weekKey} />}
 
             <div className="grid gap-6 xl:grid-cols-3">
                 <Card className="xl:col-span-2">

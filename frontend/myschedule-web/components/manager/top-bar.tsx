@@ -2,8 +2,9 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
-import { Globe, LogOut, Menu, MapPin } from "lucide-react";
+import { Globe, LogOut, Menu, MapPin, Sparkles } from "lucide-react";
 import { LocationTimezoneDialog } from "./location-timezone";
+import { AssistantDialog } from "./ai/assistant-dialog";
 import { logout } from "@/lib/api/auth";
 import { Avatar } from "@/components/ui/primitives";
 import { useManager } from "./manager-context";
@@ -22,6 +23,7 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
     const router = useRouter();
     const { user, locations, location, setLocationId, timezone, canApprove } = useManager();
     const [tzOpen, setTzOpen] = useState(false);
+    const [aiOpen, setAiOpen] = useState(false);
 
     const title = Object.entries(PAGE_TITLES).find(([path]) => pathname.startsWith(path))?.[1] ?? "";
     const name = user?.display_name || user?.username || "";
@@ -80,6 +82,16 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
                     </button>
                 )}
 
+                {location && (
+                    <button
+                        onClick={() => setAiOpen(true)}
+                        className="flex items-center gap-1.5 rounded-md border border-primary/25 bg-primary/5 px-2.5 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+                    >
+                        <Sparkles className="h-4 w-4" />
+                        <span className="hidden sm:inline">Ask AI</span>
+                    </button>
+                )}
+
                 {name && (
                     <div className="hidden items-center gap-2 md:flex">
                         <Avatar name={name} />
@@ -99,6 +111,7 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
                 </button>
             </div>
             <LocationTimezoneDialog open={tzOpen} onOpenChange={setTzOpen} />
+            <AssistantDialog open={aiOpen} onOpenChange={setAiOpen} />
         </header>
     );
 }
