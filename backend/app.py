@@ -35,7 +35,17 @@ def create_app():
 
     init_extensions(app)
 
-    origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
+    # AI request logs (feature, model, latency, outcome — never keys or prompts). Nothing
+    # else configures logging, so without a handler these INFO lines would be dropped.
+    import logging
+    ai_log = logging.getLogger("proshifts.ai")
+    if not ai_log.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        ai_log.addHandler(handler)
+        ai_log.setLevel(os.getenv("AI_LOG_LEVEL", "INFO").upper())
+
+    origins =[o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
     CORS(app, resources={r"/*": {"origins": "*" if origins == ["*"] else origins}})
 
     # REST Blueprints

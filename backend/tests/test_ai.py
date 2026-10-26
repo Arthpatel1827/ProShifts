@@ -497,6 +497,8 @@ def test_insights_facts_work_without_ai(app, client, world):
     assert {"open_shifts", "overtime", "over_budget", "conflicts"} <= types
     assert [e["name"] for e in f["overtime"]] == ["Sam Staff"]
     assert any(e["name"] == "Ria Barista" for e in f["underused_availability"])
+    assert all(e["name"] != "Sam Staff" for e in f["underused_availability"])  # already in overtime
+    assert any(c["detail"].startswith("Sam Staff has 45.0 h") for c in f["conflicts"])
     assert body["ai"]["status"] == "error" and body["ai"]["code"] == "AI_NOT_CONFIGURED"
 
 

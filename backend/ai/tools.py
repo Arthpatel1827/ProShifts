@@ -248,7 +248,10 @@ def get_employee_hours(ctx: AIContext, week_start=None):
             "scheduled_hours": round(h, 2), "shifts": counts.get(uid, 0),
             "max_hours_week": e.max_hours_week,
             "weekly_availability_hours": None if avail is None else round(avail, 2),
-            "unused_availability_hours": None if avail is None else round(max(avail - h, 0), 2),
+            # Hours they could still take: availability not yet scheduled, capped by their
+            # weekly max and the overtime threshold (someone at their limit has none).
+            "unused_availability_hours": None if avail is None else round(max(min(
+                avail - h, (e.max_hours_week if e.max_hours_week else threshold) - h, threshold - h), 0), 2),
             "status": status,
         })
     out.sort(key=lambda x: x["scheduled_hours"])
@@ -363,16 +366,16 @@ def get_schedule_conflicts(ctx: AIContext, week_start=None):
                 gaps = availability_gaps(windows, st, en)
                 if gaps:
                     conflicts.append({"type": "outside_availability", "user_id": uid, "name": name, "shift_ids": [s.shift_id],
-                                      "detail": f"Outside availability: {', '.join(gaps)}."})
+                                      "detail": f"{name} is scheduled outside their availability ({', '.join(gaps)})."})
             if s.role_id and e.role_id != s.role_id:
                 conflicts.append({"type": "role_mismatch", "user_id": uid, "name": name, "shift_ids": [s.shift_id],
                                   "detail": f"Shift needs {s.role.name if s.role else 'another role'}; {name} is {e.role.name if e.role else 'unassigned'}."})
         if e.max_hours_week and total > e.max_hours_week:
             conflicts.append({"type": "over_max_hours", "user_id": uid, "name": name, "shift_ids": [s.shift_id for s in lst],
-                              "detail": f"{total:.1f} h scheduled; max is {e.max_hours_week} h."})
+                              "detail": f"{name} has {total:.1f} h scheduled; their max is {e.max_hours_week} h."})
         elif total > threshold:
             conflicts.append({"type": "overtime", "user_id": uid, "name": name, "shift_ids": [s.shift_id for s in lst],
-                              "detail": f"{total:.1f} h scheduled, over the {threshold:g} h overtime threshold."})
+                              "detail": f"{name} has {total:.1f} h scheduled, over the {threshold:g} h overtime threshold."})
     return {"week_start": monday.isoformat(), "conflicts": conflicts}
 
 
