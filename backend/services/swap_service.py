@@ -60,11 +60,12 @@ class SwapService:
         if requesting_user_id == receiving_user_id:
             raise ValueError("You cannot swap with yourself.")
         self._assert_assigned(shift_id, requesting_user_id)
+        # Location/tenant check before anything about the other person's shift is revealed.
+        self._assert_same_location_staff(shift_id, offered_shift_id, requesting_user_id, receiving_user_id)
         self._assert_assigned(offered_shift_id, receiving_user_id)
         self._assert_shift_available(shift_id)
         self._assert_shift_available(offered_shift_id)
         self._assert_no_pending(shift_id, requesting_user_id)
-        self._assert_same_location_staff(shift_id, offered_shift_id, requesting_user_id, receiving_user_id)
         self._raise_if_conflict(self.evaluate(
             shift_id=shift_id, requesting_user_id=requesting_user_id,
             offered_shift_id=offered_shift_id, receiving_user_id=receiving_user_id,

@@ -98,8 +98,8 @@ class SwapController:
             shift_id, receiver, offered = int(shift_id), int(receiver), int(offered)
             # Only the people in the swap, about shifts they actually hold.
             svc._assert_assigned(shift_id, requester)
-            svc._assert_assigned(offered, receiver)
             svc._assert_same_location_staff(shift_id, offered, requester, receiver)
+            svc._assert_assigned(offered, receiver)
             validation = svc.evaluate(shift_id=shift_id, requesting_user_id=requester,
                                       offered_shift_id=offered, receiving_user_id=receiver)
             return jsonify({"validation": validation}), 200
