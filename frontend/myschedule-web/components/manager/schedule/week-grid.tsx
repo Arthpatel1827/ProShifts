@@ -2,26 +2,29 @@
 
 import { Plus } from "lucide-react";
 import { ShiftCard } from "./shift-card";
-import { addDays, formatHours, isSameDay, shiftHours, toDateKey } from "@/lib/format";
+import { addDaysToKey, dateKeyIn, formatHours, formatKey, shiftHours, todayKey } from "@/lib/format";
 import type { Shift } from "@/lib/types";
 
 type WeekGridProps = {
-    weekStart: Date;
+    /** Monday, "YYYY-MM-DD" at the location. */
+    weekStart: string;
+    /** Location timezone: shifts sit in the column of their *local* start date. */
+    tz: string;
     shifts: Shift[];
     names?: Map<number, string>;
-    onAddShift: (date: Date) => void;
+    onAddShift: (dateKey: string) => void;
     onShiftClick: (shift: Shift) => void;
 };
 
-export function WeekGrid({ weekStart, shifts, names, onAddShift, onShiftClick }: WeekGridProps) {
-    const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
-    const today = new Date();
+export function WeekGrid({ weekStart, tz, shifts, names, onAddShift, onShiftClick }: WeekGridProps) {
+    const days = Array.from({ length: 7 }, (_, i) => addDaysToKey(weekStart, i));
+    const today = todayKey(tz);
 
+    // An overnight shift stays one card, in the column of the day it starts.
     const shiftsByDay = new Map<string, Shift[]>();
-    days.forEach((d) => shiftsByDay.set(toDateKey(d), []));
+    days.forEach((d) => shiftsByDay.set(d, []));
     shifts.forEach((shift) => {
-        const key = toDateKey(new Date(shift.start_time));
-        shiftsByDay.get(key)?.push(shift);
+        shiftsByDay.get(dateKeyIn(shift.start_time, tz))?.push(shift);
     });
 
     return (
@@ -29,9 +32,9 @@ export function WeekGrid({ weekStart, shifts, names, onAddShift, onShiftClick }:
         <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
             <div className="grid min-w-[840px] grid-cols-7 gap-3">
                 {days.map((day) => {
-                    const key = toDateKey(day);
+                    const key = day;
                     const dayShifts = shiftsByDay.get(key) ?? [];
-                    const isToday = isSameDay(day, today);
+                    const isToday = day === today;
                     const hours = dayShifts
                         .filter((s) => s.status !== "cancelled")
                         .reduce((sum, s) => sum + shiftHours(s.start_time, s.end_time, s.break_minutes), 0);
@@ -46,10 +49,10 @@ export function WeekGrid({ weekStart, shifts, names, onAddShift, onShiftClick }:
                             >
                                 <div>
                                     <p className="text-[10px] font-semibold uppercase text-muted-foreground">
-                                        {day.toLocaleDateString("en-CA", { weekday: "short" })}
+                                        {formatKey(day, { weekday: "short", month: undefined, day: undefined })}
                                     </p>
                                     <p className={`text-sm font-semibold ${isToday ? "text-primary" : "text-foreground"}`}>
-                                        {day.getDate()}
+                                        {Number(day.slice(8, 10))}
                                         {hours > 0 && (
                                             <span className="ml-1.5 text-[10px] font-medium text-muted-foreground">
                                                 {formatHours(hours)}
@@ -61,7 +64,7 @@ export function WeekGrid({ weekStart, shifts, names, onAddShift, onShiftClick }:
                                 <button
                                     onClick={() => onAddShift(day)}
                                     className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                                    aria-label={`Add shift on ${day.toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" })}`}
+                                    aria-label={`Add shift on ${formatKey(day, { weekday: "long", month: "long", day: "numeric" })}`}
                                 >
                                     <Plus className="h-3.5 w-3.5" />
                                 </button>
@@ -80,6 +83,7 @@ export function WeekGrid({ weekStart, shifts, names, onAddShift, onShiftClick }:
                                         <ShiftCard
                                             key={shift.shift_id}
                                             shift={shift}
+                                            tz={tz}
                                             names={names}
                                             onClick={() => onShiftClick(shift)}
                                         />

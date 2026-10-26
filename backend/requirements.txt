@@ -18,3 +18,4 @@ celery==5.4.0
 anthropic==0.28.0
 pytz==2024.1
 requests==2.31.0
+tzdata==2025.2  # IANA timezone database for zoneinfo (slim images have none)

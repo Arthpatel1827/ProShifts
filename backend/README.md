@@ -30,6 +30,15 @@ All settings come from environment variables (see `.env.example`). In production
 value of at least 32 characters and `CORS_ORIGINS` lists your web origin(s) rather than `*`.
 Native mobile clients are allowed to open sockets regardless of `CORS_ORIGINS`.
 
+### Timezones
+
+Each location's `timezone` (an IANA name such as `America/Toronto`, editable via
+`PUT /admin/locations/<id>` or the web app's top bar) defines its calendar day: "today",
+week boundaries, Today's Team, late detection and analytics. Shift and clock times are
+stored as absolute instants; a naive time sent by a client means wall-clock time at the
+shift's location. All of this lives in `utils/timezones.py`; never compute day boundaries
+with UTC midnight or compare naive datetimes against `timestamptz` columns.
+
 ### Migrations
 
 Alembic owns the schema. `db.create_all()` still runs when the app starts (it only creates

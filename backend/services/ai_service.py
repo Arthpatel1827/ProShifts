@@ -1,10 +1,11 @@
 # services/ai_service.py
 import json
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional, List, Dict, Any
 import anthropic
 from flask import current_app
 from extensions import db
+from utils import timezones as tzu
 from models import AppUser, Employment, Availability, Shift, ShiftAssignment, Location
 
 
@@ -41,13 +42,13 @@ When asked to create shifts, respond with a JSON block like this:
 ```
 For other questions, respond normally without JSON.
 Location data: {json.dumps(context, indent=2)}
-Today: {datetime.utcnow().strftime('%A, %B %d, %Y')}"""
+Today: {tzu.local_today(tzu.location_tz_by_id(location_id)).strftime('%A, %B %d, %Y')} (location time)"""
         else:
             system = f"""You are a helpful scheduling assistant.
 You can suggest schedules but CANNOT create or modify shifts directly.
 Always end suggestions with: "Would you like me to set this up? You'll need the Advanced plan."
 Location data: {json.dumps(context, indent=2)}
-Today: {datetime.utcnow().strftime('%A, %B %d, %Y')}"""
+Today: {tzu.local_today(tzu.location_tz_by_id(location_id)).strftime('%A, %B %d, %Y')} (location time)"""
 
         messages = list(conversation_history or [])
         messages.append({"role": "user", "content": message})
@@ -102,7 +103,8 @@ Respond ONLY with a JSON array:
 
     # ── Staffing predictor ────────────────────────────────────────────────────
     def predict_staffing(self, *, location_id, target_week):
-        eight_weeks_ago = datetime.utcnow() - timedelta(weeks=8)
+        tz = tzu.location_tz_by_id(location_id)
+        eight_weeks_ago = tzu.utc_now() - timedelta(weeks=8)
         historical = Shift.query.filter(
             Shift.location_id == location_id,
             Shift.status == "published",
@@ -111,7 +113,7 @@ Respond ONLY with a JSON array:
 
         day_counts = {d: [] for d in ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]}
         for shift in historical:
-            day = shift.start_time.strftime("%A")
+            day = tzu.to_local(shift.start_time, tz).strftime("%A")
             day_counts[day].append(len(shift.assignments))
 
         history_summary = {
@@ -167,9 +169,12 @@ Respond ONLY with JSON:
         if not shift:
             return []
 
-        shift_day   = shift.start_time.strftime("%a").lower()
-        shift_start = shift.start_time.time()
-        shift_end   = shift.end_time.time()
+        # Availability is stored as local wall-clock times, so compare in location time.
+        tz          = tzu.location_tz_by_id(shift.location_id)
+        local_start = tzu.to_local(shift.start_time, tz)
+        shift_day   = local_start.strftime("%a").lower()
+        shift_start = local_start.time()
+        shift_end   = tzu.to_local(shift.end_time, tz).time()
 
         emps = Employment.query.filter(
             Employment.location_id == location_id,
@@ -184,10 +189,7 @@ Respond ONLY with JSON:
             ).first()
             if avail and avail.start_time <= shift_start and avail.end_time >= shift_end:
                 user = AppUser.query.get(emp.user_id)
-                ws = shift.start_time.replace(hour=0, minute=0, second=0) - timedelta(
-                    days=shift.start_time.weekday()
-                )
-                we = ws + timedelta(days=7)
+                ws, we = tzu.week_bounds(tz, local_start.date())
                 shift_count = (
                     db.session.query(ShiftAssignment)
                     .join(Shift)
@@ -206,7 +208,7 @@ Respond ONLY with JSON:
             return []
 
         prompt = f"""Rank these employees as swap candidates.
-Shift: {shift.start_time.strftime('%A %I:%M %p')} - {shift.end_time.strftime('%I:%M %p')}
+Shift: {local_start.strftime('%A %I:%M %p')} - {tzu.to_local(shift.end_time, tz).strftime('%I:%M %p')} (location time)
 Role needed: {shift.role.name if shift.role else 'Any'}
 Candidates: {json.dumps(eligible, indent=2)}
 
@@ -253,7 +255,8 @@ Respond ONLY with JSON — top 3:
                     "start_time": av.start_time.strftime("%H:%M"),
                     "end_time":   av.end_time.strftime("%H:%M"),
                 })
-        now      = datetime.utcnow()
+        tz       = tzu.location_tz(location)
+        now      = tzu.utc_now()
         upcoming = Shift.query.filter(
             Shift.location_id == location_id,
             Shift.start_time >= now,
@@ -268,8 +271,9 @@ Respond ONLY with JSON — top 3:
             "existing_shifts": [
                 {
                     "shift_id":    s.shift_id,
-                    "start_time":  s.start_time.isoformat(),
-                    "end_time":    s.end_time.isoformat(),
+                    # Local wall-clock times, matching what the model is asked to return.
+                    "start_time":  tzu.to_local(s.start_time, tz).replace(tzinfo=None).isoformat(),
+                    "end_time":    tzu.to_local(s.end_time, tz).replace(tzinfo=None).isoformat(),
                     "status":      s.status,
                     "assigned_to": [a.user_id for a in s.assignments],
                 }

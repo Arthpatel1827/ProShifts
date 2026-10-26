@@ -6,7 +6,7 @@ import { useManager } from "@/components/manager/manager-context";
 import { Badge, Card, CardHeader, EmptyState, ErrorState, Skeleton, Stat } from "@/components/ui/primitives";
 import { getAnalytics } from "@/lib/api/analytics";
 import { useQuery } from "@/lib/hooks/use-query";
-import { addDays, formatHours, formatMoney, toDateKey } from "@/lib/format";
+import { addDaysToKey, formatHours, formatMoney, todayKey } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Analytics, AnalyticsPeriod } from "@/lib/types";
 
@@ -16,31 +16,36 @@ const PERIODS: { value: AnalyticsPeriod; label: string }[] = [
     { value: "month", label: "Month" },
 ];
 
-function shiftAnchor(anchor: Date, period: AnalyticsPeriod, dir: -1 | 1): Date {
-    if (period === "day") return addDays(anchor, dir);
-    if (period === "week") return addDays(anchor, 7 * dir);
-    return new Date(anchor.getFullYear(), anchor.getMonth() + dir, 1);
+/** Moves a "YYYY-MM-DD" anchor by one period. */
+function shiftAnchor(anchor: string, period: AnalyticsPeriod, dir: -1 | 1): string {
+    if (period === "day") return addDaysToKey(anchor, dir);
+    if (period === "week") return addDaysToKey(anchor, 7 * dir);
+    const [y, m] = anchor.split("-").map(Number);
+    const d = new Date(Date.UTC(y, m - 1 + dir, 1));
+    return d.toISOString().slice(0, 10);
 }
 
 export default function AnalyticsPage() {
-    const { location } = useManager();
+    const { location, timezone: tz } = useManager();
     const locationId = location?.id ?? null;
     const [period, setPeriod] = useState<AnalyticsPeriod>("week");
-    const [anchor, setAnchor] = useState(() => new Date());
-    const anchorKey = toDateKey(anchor);
+    // Anchored on the location's today; null = follow the current period.
+    const [picked, setPicked] = useState<string | null>(null);
+    const today = todayKey(tz);
+    const anchorKey = picked ?? today;
 
     const q = useQuery(locationId ? ["analytics", locationId, period, anchorKey] : null, () =>
         getAnalytics(locationId!, period, anchorKey)
     );
     const a = q.data;
-    const isCurrent = toDateKey(shiftAnchor(anchor, period, 1)) > toDateKey(new Date());
+    const isCurrent = shiftAnchor(anchorKey, period, 1) > today;
 
     return (
         <div className="space-y-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
                     <button
-                        onClick={() => setAnchor((d) => shiftAnchor(d, period, -1))}
+                        onClick={() => setPicked(shiftAnchor(anchorKey, period, -1))}
                         className="rounded-md p-2 text-muted-foreground hover:bg-accent"
                         aria-label={`Previous ${period}`}
                     >
@@ -50,7 +55,7 @@ export default function AnalyticsPage() {
                         {a?.date_label ?? "…"}
                     </span>
                     <button
-                        onClick={() => setAnchor((d) => shiftAnchor(d, period, 1))}
+                        onClick={() => setPicked(shiftAnchor(anchorKey, period, 1))}
                         disabled={isCurrent}
                         className="rounded-md p-2 text-muted-foreground hover:bg-accent disabled:opacity-40"
                         aria-label={`Next ${period}`}
@@ -59,7 +64,7 @@ export default function AnalyticsPage() {
                     </button>
                     {!isCurrent && (
                         <button
-                            onClick={() => setAnchor(new Date())}
+                            onClick={() => setPicked(null)}
                             className="ml-1 rounded-md border border-input px-3 py-1.5 text-sm font-medium hover:bg-accent"
                         >
                             Current

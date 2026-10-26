@@ -6,6 +6,7 @@ import { TopBar } from "./top-bar";
 import { useManager } from "./manager-context";
 import { EmptyState, ErrorState, Skeleton } from "@/components/ui/primitives";
 import { MapPin } from "lucide-react";
+import { TimezoneNotice } from "./location-timezone";
 
 export function ManagerShell({ children }: { children: React.ReactNode }) {
     const [navOpen, setNavOpen] = useState(false);
@@ -38,7 +39,10 @@ export function ManagerShell({ children }: { children: React.ReactNode }) {
             <Sidebar open={navOpen} onNavigate={() => setNavOpen(false)} />
             <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
                 <TopBar onMenu={() => setNavOpen(true)} />
-                <main className="flex-1 overflow-y-auto p-4 sm:p-6">{content}</main>
+                <main className="flex-1 overflow-y-auto p-4 sm:p-6">
+                    {ready && location && <TimezoneNotice />}
+                    {content}
+                </main>
             </div>
         </div>
     );

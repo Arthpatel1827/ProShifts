@@ -220,15 +220,16 @@ function RequestList({
 }
 
 function ShiftBox({ label, shift }: { label: string; shift: RequestShift | null }) {
+    const { timezone: tz } = useManager();
     if (!shift?.start_time || !shift.end_time) {
         return <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">Shift no longer exists.</div>;
     }
     return (
         <div className="rounded-md bg-muted/60 p-3">
             <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
-            <p className="mt-1 text-sm font-medium text-foreground">{formatDate(shift.start_time, { weekday: "long" })}</p>
+            <p className="mt-1 text-sm font-medium text-foreground">{formatDate(shift.start_time, { weekday: "long" }, tz)}</p>
             <p className="text-sm text-muted-foreground">
-                {formatTimeRange(shift.start_time, shift.end_time)}
+                {formatTimeRange(shift.start_time, shift.end_time, tz)}
                 {shift.role ? ` · ${shift.role}` : ""}
             </p>
         </div>
@@ -257,6 +258,7 @@ function RequestCard({
     onDecide: (approve: boolean) => Promise<string | undefined>;
     children: React.ReactNode;
 }) {
+    const { timezone: tz } = useManager();
     const toast = useToast();
     const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
 
@@ -296,7 +298,7 @@ function RequestCard({
                             <ul className="text-xs text-muted-foreground">
                                 {conflicts.map((c) => (
                                     <li key={c.shift_id}>
-                                        Clashes with {formatDate(c.start_time)} {formatTimeRange(c.start_time, c.end_time)}
+                                        Clashes with {formatDate(c.start_time, {}, tz)} {formatTimeRange(c.start_time, c.end_time, tz)}
                                         {c.role ? ` (${c.role})` : ""}
                                     </li>
                                 ))}

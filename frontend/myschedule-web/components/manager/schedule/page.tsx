@@ -14,15 +14,16 @@ import { useToast } from "@/components/ui/toast";
 import { getLaborCost, listShifts, publishWeek, rolesWithStaff } from "@/lib/api/shifts";
 import { useQuery } from "@/lib/hooks/use-query";
 import { useLiveRefresh } from "@/lib/hooks/use-socket";
-import { addDays, formatHours, formatMoney, getMonday, toDateKey } from "@/lib/format";
+import { addDaysToKey, formatHours, formatMoney, mondayOfKey, todayKey } from "@/lib/format";
 import type { Shift } from "@/lib/types";
 
 export default function SchedulePage() {
-    const { location } = useManager();
+    const { location, timezone: tz } = useManager();
     const toast = useToast();
     const locationId = location?.id ?? null;
-    const [weekStart, setWeekStart] = useState<Date>(() => getMonday(new Date()));
-    const weekKey = toDateKey(weekStart);
+    // Weeks are Monday–Sunday at the *location*, whatever the viewer's computer says.
+    const [weekPick, setWeekPick] = useState<string | null>(null);
+    const weekKey = weekPick ?? mondayOfKey(todayKey(tz));
 
     const shifts = useQuery(locationId ? ["shifts", locationId, weekKey] : null, () =>
         listShifts(locationId!, weekKey)
@@ -40,7 +41,7 @@ export default function SchedulePage() {
 
     const [formOpen, setFormOpen] = useState(false);
     const [editing, setEditing] = useState<Shift | null>(null);
-    const [newDate, setNewDate] = useState<Date | null>(null);
+    const [newDate, setNewDate] = useState<string | null>(null);
     const [selected, setSelected] = useState<Shift | null>(null);
     const [confirmPublish, setConfirmPublish] = useState(false);
     const [publishing, setPublishing] = useState(false);
@@ -65,7 +66,7 @@ export default function SchedulePage() {
         void labor.refetch();
     }
 
-    function openCreate(date: Date) {
+    function openCreate(date: string) {
         setEditing(null);
         setNewDate(date);
         setFormOpen(true);
@@ -96,14 +97,14 @@ export default function SchedulePage() {
         <div className="space-y-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <WeekNav
-                    weekStart={weekStart}
-                    onPrevWeek={() => setWeekStart((d) => addDays(d, -7))}
-                    onNextWeek={() => setWeekStart((d) => addDays(d, 7))}
-                    onToday={() => setWeekStart(getMonday(new Date()))}
+                    weekStart={weekKey}
+                    onPrevWeek={() => setWeekPick(addDaysToKey(weekKey, -7))}
+                    onNextWeek={() => setWeekPick(addDaysToKey(weekKey, 7))}
+                    onToday={() => setWeekPick(null)}
                 />
 
                 <div className="flex flex-wrap items-center gap-2">
-                    <Button variant="outline" size="lg" onClick={() => openCreate(new Date() > weekStart ? new Date() : weekStart)}>
+                    <Button variant="outline" size="lg" onClick={() => openCreate(todayKey(tz) > weekKey ? todayKey(tz) : weekKey)}>
                         <Plus /> Add shift
                     </Button>
                     <Button size="lg" onClick={() => setConfirmPublish(true)} disabled={draftCount === 0}>
@@ -136,7 +137,8 @@ export default function SchedulePage() {
                 </div>
             ) : (
                 <WeekGrid
-                    weekStart={weekStart}
+                    weekStart={weekKey}
+                    tz={tz}
                     shifts={list}
                     names={names}
                     onAddShift={openCreate}
@@ -152,12 +154,14 @@ export default function SchedulePage() {
                     roles={roles.data ?? []}
                     shift={editing}
                     defaultDate={newDate}
+                    tz={tz}
                     onSaved={upsert}
                 />
             )}
 
             <ShiftDetailDialog
                 shift={selected}
+                tz={tz}
                 onOpenChange={(open) => !open && setSelected(null)}
                 roles={roles.data ?? []}
                 names={names}

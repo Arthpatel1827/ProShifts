@@ -20,16 +20,17 @@ import { getTeamStatus } from "@/lib/api/team";
 import { useQuery } from "@/lib/hooks/use-query";
 import { useLiveRefresh } from "@/lib/hooks/use-socket";
 import {
-    addDays,
+    addDaysToKey,
+    dateKeyIn,
     formatDate,
     formatHours,
+    formatKey,
     formatMoney,
     formatTime,
     formatTimeRange,
-    getMonday,
-    isSameDay,
+    mondayOfKey,
     shiftHours,
-    toDateKey,
+    todayKey,
 } from "@/lib/format";
 import { teamStatusTone } from "@/lib/theme/tokens";
 import type { Shift } from "@/lib/types";
@@ -37,11 +38,12 @@ import type { Shift } from "@/lib/types";
 const TEAM_REFRESH_MS = 60_000;
 
 export default function DashboardPage() {
-    const { location, user, pending } = useManager();
+    const { location, user, pending, timezone: tz } = useManager();
     const locationId = location?.id ?? null;
+    // "Today" and "this week" are the location's, not the viewer's computer's.
     const now = new Date();
-    const weekStart = getMonday(now);
-    const weekKey = toDateKey(weekStart);
+    const today = todayKey(tz);
+    const weekKey = mondayOfKey(today);
 
     const team = useQuery(locationId ? ["team-status", locationId] : null, () => getTeamStatus(locationId!), {
         refreshMs: TEAM_REFRESH_MS,
@@ -67,10 +69,12 @@ export default function DashboardPage() {
     }, [roles.data]);
 
     const live = (shifts.data ?? []).filter((s) => s.status !== "cancelled");
-    const today = live.filter((s) => isSameDay(new Date(s.start_time), now));
-    const inProgress = today.filter((s) => new Date(s.start_time) <= now && now < new Date(s.end_time));
+    const isRunning = (s: Shift) => new Date(s.start_time) <= now && now < new Date(s.end_time);
+    // Shifts starting today, plus last night's overnight shift while it's still running.
+    const todays = live.filter((s) => dateKeyIn(s.start_time, tz) === today || isRunning(s));
+    const inProgress = todays.filter(isRunning);
     const upcoming = live
-        .filter((s) => new Date(s.start_time) > now && !isSameDay(new Date(s.start_time), now))
+        .filter((s) => new Date(s.start_time) > now && dateKeyIn(s.start_time, tz) > today)
         .slice(0, 6);
     const unassigned = live.filter((s) => s.assignments.length === 0 && new Date(s.end_time) > now);
     const drafts = live.filter((s) => s.status === "draft");
@@ -90,7 +94,7 @@ export default function DashboardPage() {
                     {greetingName ? `, ${greetingName}` : ""}
                 </h2>
                 <p className="text-sm text-muted-foreground">
-                    {formatDate(now, { weekday: "long", month: "long", year: "numeric" })} · {location?.name}
+                    {formatKey(today, { weekday: "long", month: "long", year: "numeric" })} · {location?.name}
                 </p>
             </div>
 
@@ -156,13 +160,13 @@ export default function DashboardPage() {
                                             <p className="truncate text-sm font-medium text-foreground">{m.name}</p>
                                             <p className="truncate text-xs text-muted-foreground">
                                                 {m.role}
-                                                {m.shift_start && m.shift_end && ` · ${formatTimeRange(m.shift_start, m.shift_end)}`}
+                                                {m.shift_start && m.shift_end && ` · ${formatTimeRange(m.shift_start, m.shift_end, tz)}`}
                                             </p>
                                         </div>
                                         <div className="text-right">
                                             <Badge tone={s.tone}>{s.label}</Badge>
                                             {m.clocked_in && (
-                                                <p className="mt-1 text-[11px] text-muted-foreground">In at {formatTime(m.clocked_in)}</p>
+                                                <p className="mt-1 text-[11px] text-muted-foreground">In at {formatTime(m.clocked_in, tz)}</p>
                                             )}
                                         </div>
                                     </li>
@@ -179,7 +183,7 @@ export default function DashboardPage() {
                             <Skeleton className="h-40" />
                         </div>
                     ) : (
-                        <WeekShape weekStart={weekStart} shifts={live} />
+                        <WeekShape weekStart={weekKey} tz={tz} shifts={live} />
                     )}
                 </Card>
             </div>
@@ -188,9 +192,10 @@ export default function DashboardPage() {
                 <ShiftList
                     title="Today's schedule"
                     description={inProgress.length ? `${inProgress.length} in progress` : "Nothing in progress right now"}
-                    shifts={today}
+                    shifts={todays}
                     names={names}
                     now={now}
+                    tz={tz}
                     loading={shifts.loading}
                     error={shifts.error?.message}
                     empty="No shifts today."
@@ -201,6 +206,7 @@ export default function DashboardPage() {
                     shifts={upcoming}
                     names={names}
                     now={now}
+                    tz={tz}
                     loading={shifts.loading}
                     error={shifts.error?.message}
                     empty="No more shifts scheduled this week."
@@ -295,11 +301,11 @@ function Alerts({ late, unassigned, drafts, pending }: { late: number; unassigne
     );
 }
 
-function WeekShape({ weekStart, shifts }: { weekStart: Date; shifts: Shift[] }) {
-    const today = new Date();
+function WeekShape({ weekStart, tz, shifts }: { weekStart: string; tz: string; shifts: Shift[] }) {
+    const today = todayKey(tz);
     const days = Array.from({ length: 7 }, (_, i) => {
-        const day = addDays(weekStart, i);
-        const dayShifts = shifts.filter((s) => isSameDay(new Date(s.start_time), day));
+        const day = addDaysToKey(weekStart, i);
+        const dayShifts = shifts.filter((s) => dateKeyIn(s.start_time, tz) === day);
         const hours = dayShifts.reduce((sum, s) => sum + shiftHours(s.start_time, s.end_time, s.break_minutes), 0);
         const open = dayShifts.filter((s) => s.assignments.length === 0).length;
         return { day, hours, count: dayShifts.length, open };
@@ -314,9 +320,9 @@ function WeekShape({ weekStart, shifts }: { weekStart: Date; shifts: Shift[] }) 
         <div className="px-5 pb-5">
             <div className="flex items-end gap-2" role="img" aria-label="Scheduled hours per day this week">
                 {days.map((d) => {
-                    const isToday = isSameDay(d.day, today);
+                    const isToday = d.day === today;
                     return (
-                        <div key={d.day.toISOString()} className="flex flex-1 flex-col items-center gap-1.5">
+                        <div key={d.day} className="flex flex-1 flex-col items-center gap-1.5">
                             <span className="text-[10px] font-medium tabular-nums text-muted-foreground">
                                 {d.hours ? formatHours(Math.round(d.hours)) : ""}
                             </span>
@@ -329,7 +335,7 @@ function WeekShape({ weekStart, shifts }: { weekStart: Date; shifts: Shift[] }) 
                                 />
                             </div>
                             <span className={`text-[11px] ${isToday ? "font-semibold text-primary" : "text-muted-foreground"}`}>
-                                {d.day.toLocaleDateString("en-CA", { weekday: "narrow" })}
+                                {formatKey(d.day, { weekday: "narrow", month: undefined, day: undefined })}
                             </span>
                         </div>
                     );
@@ -345,6 +351,7 @@ function ShiftList({
     shifts,
     names,
     now,
+    tz,
     loading,
     error,
     empty,
@@ -355,6 +362,7 @@ function ShiftList({
     shifts: Shift[];
     names: Map<number, string>;
     now: Date;
+    tz: string;
     loading: boolean;
     error?: string;
     empty: string;
@@ -388,8 +396,8 @@ function ShiftList({
                         return (
                             <li key={s.shift_id} className={`flex items-center gap-3 px-5 py-3 ${done ? "opacity-60" : ""}`}>
                                 <div className="w-24 shrink-0 text-xs">
-                                    {showDate && <p className="font-medium text-foreground">{formatDate(s.start_time)}</p>}
-                                    <p className="text-muted-foreground">{formatTime(s.start_time)}</p>
+                                    {showDate && <p className="font-medium text-foreground">{formatDate(s.start_time, {}, tz)}</p>}
+                                    <p className="text-muted-foreground">{formatTime(s.start_time, tz)}</p>
                                 </div>
                                 <div className="min-w-0 flex-1">
                                     <p className="truncate text-sm font-medium text-foreground">{s.role ?? "Any role"}</p>

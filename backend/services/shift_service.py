@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from extensions import db
 from models import Shift, ShiftAssignment, AppUser, Location, Employment, Role
 from services.notification_service import NotificationService
+from utils import timezones as tzu
 from utils.socket_events import (
     emit_shift_updated, emit_shift_assigned,
     emit_schedule_published, emit_labor_cost_update,
@@ -20,6 +21,10 @@ class ShiftService:
                      end_time, role_id=None, break_minutes=0,
                      notes=None, created_by_ai=False):
         self._assert_manager(caller_user_id, location_id)
+        # A naive time from a client is wall-clock time at this location.
+        tz = tzu.location_tz_by_id(location_id)
+        start_time = tzu.localize(start_time, tz)
+        end_time   = tzu.localize(end_time, tz)
         self._assert_times(start_time, end_time)
 
         shift = Shift(
@@ -43,13 +48,11 @@ class ShiftService:
                    week_start=None, status=None):
         self._assert_member(caller_user_id, location_id)
         q = Shift.query.filter_by(location_id=location_id)
-        if week_start:
-            try:
-                ws = datetime.strptime(week_start, "%Y-%m-%d")
-                we = ws + timedelta(days=7)
-                q = q.filter(Shift.start_time >= ws, Shift.start_time < we)
-            except ValueError:
-                pass
+        day = tzu.parse_date(week_start)
+        if day:
+            # The 7 local days from week_start, in the location's timezone.
+            ws, we = self._local_week(location_id, day)
+            q = q.filter(Shift.start_time >= ws, Shift.start_time < we)
         if status:
             q = q.filter_by(status=status)
         return q.order_by(Shift.start_time.asc()).all()
@@ -67,13 +70,12 @@ class ShiftService:
             .join(ShiftAssignment, ShiftAssignment.shift_id == Shift.shift_id)
             .filter(ShiftAssignment.user_id == user_id, Shift.status == "published")
         )
-        if week_start:
-            try:
-                ws = datetime.strptime(week_start, "%Y-%m-%d")
-                we = ws + timedelta(days=7)
-                q = q.filter(Shift.start_time >= ws, Shift.start_time < we)
-            except ValueError:
-                pass
+        day = tzu.parse_date(week_start)
+        if day:
+            tz = tzu.user_tz(user_id)
+            ws, _ = tzu.day_bounds(tz, day)
+            we, _ = tzu.day_bounds(tz, day + timedelta(days=7))
+            q = q.filter(Shift.start_time >= ws, Shift.start_time < we)
         return q.order_by(Shift.start_time.asc()).all()
 
     # ── Update ────────────────────────────────────────────────────────────────
@@ -85,13 +87,14 @@ class ShiftService:
         self._assert_manager(caller_user_id, shift.location_id)
         if shift.status == "cancelled":
             raise ValueError("Cannot edit a cancelled shift")
-        if start_time:    shift.start_time    = start_time
-        if end_time:      shift.end_time      = end_time
+        tz = tzu.location_tz_by_id(shift.location_id)
+        if start_time:    shift.start_time    = tzu.localize(start_time, tz)
+        if end_time:      shift.end_time      = tzu.localize(end_time, tz)
         if role_id is not None:       shift.role_id       = role_id
         if break_minutes is not None: shift.break_minutes = break_minutes
         if notes is not None:         shift.notes         = notes
         if start_time or end_time:
-            self._assert_times(shift.start_time, shift.end_time)
+            self._assert_times(tzu.as_aware_utc(shift.start_time), tzu.as_aware_utc(shift.end_time))
         db.session.commit()
         emit_shift_updated(shift.location_id, shift.shift_id, "updated")
         return shift
@@ -109,7 +112,7 @@ class ShiftService:
                 user_id=assignment.user_id,
                 notif_type="shift_cancelled",
                 title="Shift Cancelled",
-                body=f"Your shift on {shift.start_time.strftime('%b %d at %I:%M %p')} has been cancelled.",
+                body=f"Your shift on {tzu.shift_local_str(shift)} has been cancelled.",
                 data={"shift_id": shift_id},
             )
         emit_shift_updated(shift.location_id, shift.shift_id, "cancelled")
@@ -133,12 +136,9 @@ class ShiftService:
         # Same conflict rules as bulk_create_week.
         if self._has_overlap(user_id, shift.start_time, shift.end_time):
             raise ValueError("This employee already has a shift that overlaps this time")
-        day = shift.start_time.date()
-        time_off = self._approved_timeoff_map(
-            shift.location_id,
-            datetime.combine(day, datetime.min.time()),
-            datetime.combine(day, datetime.min.time()) + timedelta(days=1),
-        )
+        # Time off is stored as local calendar dates, so compare the shift's *local* date.
+        day = tzu.local_date_of(shift.start_time, tzu.location_tz_by_id(shift.location_id))
+        time_off = self._approved_timeoff_map(shift.location_id, day, day + timedelta(days=1))
         if self._is_on_timeoff(time_off, user_id, day):
             raise ValueError("This employee has approved time off on this day")
         assignment = ShiftAssignment(
@@ -151,7 +151,7 @@ class ShiftService:
             user_id=user_id,
             notif_type="shift_assigned",
             title="New Shift",
-            body=f"You have been scheduled for {shift.start_time.strftime('%A, %b %d at %I:%M %p')}.",
+            body=f"You have been scheduled for {tzu.shift_local_str(shift, '%A, %b %d at %I:%M %p')}.",
             data={"shift_id": shift_id},
         )
         return assignment
@@ -188,15 +188,13 @@ class ShiftService:
         """
         self._assert_manager(caller_user_id, location_id)
 
-        try:
-            monday = datetime.strptime(week_start, "%Y-%m-%d")
-        except ValueError:
+        day = tzu.parse_date(week_start)
+        if not day:
             raise ValueError("week_start must be YYYY-MM-DD")
-        monday = monday - timedelta(days=monday.weekday())
-        monday = monday.replace(hour=0, minute=0, second=0, microsecond=0)
-
-        week_end = monday + timedelta(days=7)
-        time_off_map = self._approved_timeoff_map(location_id, monday, week_end)
+        # Row times ("09:00") are wall-clock times at this location.
+        tz = tzu.location_tz_by_id(location_id)
+        monday = tzu.week_monday(day)
+        time_off_map = self._approved_timeoff_map(location_id, monday, monday + timedelta(days=7))
 
         created = []
         skipped = []
@@ -234,16 +232,18 @@ class ShiftService:
             for day in days:
                 if day < 0 or day > 6:
                     continue
-                day_date   = monday + timedelta(days=day)
-                start_time = day_date.replace(hour=sh, minute=sm)
-                end_time   = day_date.replace(hour=eh, minute=em)
-
-                # Overnight shift support: end before start → next day
-                if end_time <= start_time:
-                    end_time += timedelta(days=1)
+                day_date = monday + timedelta(days=day)
+                try:
+                    start_time = datetime.combine(day_date, datetime.min.time().replace(hour=sh, minute=sm), tzinfo=tz)
+                    # Overnight shift support: an end at or before the start is on the next day.
+                    end_date = day_date + timedelta(days=1) if (eh, em) <= (sh, sm) else day_date
+                    end_time = datetime.combine(end_date, datetime.min.time().replace(hour=eh, minute=em), tzinfo=tz)
+                except ValueError:
+                    skipped.append({"index": idx, "reason": "Invalid time format"})
+                    break
 
                 # Conflict: approved time off
-                if self._is_on_timeoff(time_off_map, user_id, day_date.date()):
+                if self._is_on_timeoff(time_off_map, user_id, day_date):
                     skipped.append({
                         "index": idx, "user_id": user_id,
                         "day": day_date.strftime("%a %b %d"),
@@ -288,15 +288,16 @@ class ShiftService:
         }
 
     def _approved_timeoff_map(self, location_id, start, end):
-        """Returns {user_id: [(start_date, end_date), ...]} for approved time off overlapping the window."""
+        """{user_id: [(start_date, end_date), ...]} for approved time off overlapping the
+        local calendar dates [start, end)."""
         try:
             from models import TimeOffRequest
         except ImportError:
             return {}
         reqs = TimeOffRequest.query.filter(
             TimeOffRequest.status == "approved",
-            TimeOffRequest.start_date < end.date(),
-            TimeOffRequest.end_date >= start.date(),
+            TimeOffRequest.start_date < end,
+            TimeOffRequest.end_date >= start,
         ).all()
         result = {}
         for r in reqs:
@@ -363,8 +364,10 @@ class ShiftService:
     # ── Publish ───────────────────────────────────────────────────────────────
     def publish_week(self, *, caller_user_id, location_id, week_start):
         self._assert_manager(caller_user_id, location_id)
-        ws = datetime.strptime(week_start, "%Y-%m-%d")
-        we = ws + timedelta(days=7)
+        day = tzu.parse_date(week_start)
+        if not day:
+            raise ValueError("week_start must be YYYY-MM-DD")
+        ws, we = self._local_week(location_id, day)
         drafts = Shift.query.filter(
             Shift.location_id == location_id,
             Shift.status == "draft",
@@ -384,15 +387,17 @@ class ShiftService:
             location_id=location_id,
             notif_type="schedule_published",
             title="Schedule Published",
-            body=f"The schedule for week of {ws.strftime('%b %d')} is now available.",
+            body=f"The schedule for week of {day.strftime('%b %d')} is now available.",
             data={"week_start": week_start, "location_id": location_id},
         )
         return count
 
     # ── Labor cost ────────────────────────────────────────────────────────────
     def get_labor_cost(self, *, location_id, week_start, hourly_rate=15.0):
-        ws = datetime.strptime(week_start, "%Y-%m-%d")
-        we = ws + timedelta(days=7)
+        day = tzu.parse_date(week_start)
+        if not day:
+            raise ValueError("week_start must be YYYY-MM-DD")
+        ws, we = self._local_week(location_id, day)
         shifts = Shift.query.filter(
             Shift.location_id == location_id,
             Shift.status.in_(["draft", "published"]),
@@ -448,6 +453,14 @@ class ShiftService:
                 for a in shift.assignments
             ],
         }
+
+    @staticmethod
+    def _local_week(location_id, first_day):
+        """Aware UTC bounds of the 7 local days starting at first_day at this location."""
+        tz = tzu.location_tz_by_id(location_id)
+        start, _ = tzu.day_bounds(tz, first_day)
+        end, _ = tzu.day_bounds(tz, first_day + timedelta(days=7))
+        return start, end
 
     # ── Guards ────────────────────────────────────────────────────────────────
     @staticmethod

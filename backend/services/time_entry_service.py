@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 
 from extensions import db
+from utils import timezones as tzu
 from models import TimeEntry, BreakEntry, Shift, ShiftAssignment, Company, Employment
 
 
@@ -67,9 +68,11 @@ class TimeEntryService:
 
                 if now < window_open:
                     mins_until = int((window_open - now).total_seconds() / 60)
+                    # Shown in the location's local time, not the database's timezone.
+                    tz = tzu.location_tz(shift.location)
                     raise ValueError(
                         f"Too early to clock in. You can clock in from "
-                        f"{window_open.strftime('%I:%M %p')} "
+                        f"{tzu.format_local_time(window_open, tz)} "
                         f"(in {mins_until} minutes)."
                     )
                 if now > window_close:
@@ -213,9 +216,10 @@ class TimeEntryService:
 
                 if now < window_open:
                     mins_left = int((window_open - now).total_seconds() / 60)
+                    tz = tzu.location_tz(shift.location)
                     raise ValueError(
                         f"Too early to clock out. Your shift ends at "
-                        f"{shift_end.strftime('%I:%M %p')} "
+                        f"{tzu.format_local_time(shift_end, tz)} "
                         f"({mins_left} minutes remaining)."
                     )
                 if now > window_close:
@@ -246,13 +250,13 @@ class TimeEntryService:
 
     # ── Weekly summary ────────────────────────────────────────────────────────
     def get_weekly_summary(self, user_id: int) -> Dict[str, Any]:
-        now    = datetime.now(timezone.utc)
-        monday = (now - timedelta(days=now.weekday())).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        # This week = since Monday 00:00 at the employee's location.
+        tz          = tzu.user_tz(user_id)
+        monday      = tzu.week_monday(tzu.local_today(tz))
+        week_start, _ = tzu.day_bounds(tz, monday)
         entries = TimeEntry.query.filter(
             TimeEntry.user_id  == user_id,
-            TimeEntry.clock_in >= monday,
+            TimeEntry.clock_in >= week_start,
             TimeEntry.clock_out.isnot(None),
         ).all()
 
@@ -262,7 +266,7 @@ class TimeEntryService:
             for e in entries
         )
         return {
-            "week_start":    monday.date().isoformat(),
+            "week_start":    monday.isoformat(),
             "total_entries": len(entries),
             "total_minutes": total_minutes,
             "total_hours":   round(total_minutes / 60, 2),
@@ -272,22 +276,29 @@ class TimeEntryService:
     # ── Get today's shift ─────────────────────────────────────────────────────
     def get_today_shift(self, user_id: int) -> Optional[Dict]:
         from models import Shift
-        now   = datetime.now(timezone.utc)
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        end   = start + timedelta(days=1)
+        # Local calendar day at the employee's location, plus an overnight shift from
+        # yesterday that is still running.
+        tz    = tzu.user_tz(user_id)
+        now   = tzu.utc_now()
+        start, end = tzu.day_bounds(tz, tzu.local_today(tz))
 
-        shift = (
+        candidates = (
             Shift.query
             .join(ShiftAssignment, ShiftAssignment.shift_id == Shift.shift_id)
             .filter(
                 ShiftAssignment.user_id == user_id,
                 Shift.status            == "published",
-                Shift.start_time        >= start,
                 Shift.start_time        <  end,
+                db.or_(Shift.start_time >= start, Shift.end_time > now),
             )
             .order_by(Shift.start_time.asc())
-            .first()
+            .all()
         )
+        # In-progress first, otherwise the earliest shift today (previous behaviour).
+        shift = next(
+            (s for s in candidates if tzu.as_aware_utc(s.start_time) <= now < tzu.as_aware_utc(s.end_time)),
+            None,
+        ) or next((s for s in candidates if tzu.as_aware_utc(s.start_time) >= start), None)
         if not shift:
             return None
         return {

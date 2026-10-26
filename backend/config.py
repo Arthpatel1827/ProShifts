@@ -11,6 +11,9 @@ class Config:
         "pool_recycle": 300,
         "pool_size": 10,
         "max_overflow": 20,
+        # Pin the session to UTC so naive values and timestamptz output never depend on the
+        # database server's own timezone setting. Local days come from Location.timezone.
+        "connect_args": {"options": "-c timezone=UTC"},
     }
     JSON_SORT_KEYS = False
 

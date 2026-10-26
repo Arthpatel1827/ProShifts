@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Field, FormError, Input, Select, Textarea } from "@/components/ui/form";
 import { useToast } from "@/components/ui/toast";
 import { assignUser, createShift, updateShift } from "@/lib/api/shifts";
-import { addDays, combine, formatHours, toDateKey, toOffsetIso, toTimeInput } from "@/lib/format";
+import { addDaysToKey, dateKeyIn, formatHours, naiveLocalIso, timeIn, todayKey } from "@/lib/format";
 import type { RoleWithStaff, Shift } from "@/lib/types";
 
 type Props = {
@@ -18,7 +18,10 @@ type Props = {
     /** Present when editing. */
     shift?: Shift | null;
     /** Pre-selected day when creating. */
-    defaultDate?: Date | null;
+    /** Pre-selected day ("YYYY-MM-DD" at the location) when creating. */
+    defaultDate?: string | null;
+    /** Location timezone: the form edits wall-clock time at the location. */
+    tz: string;
     onSaved: (shift: Shift) => void;
 };
 
@@ -34,14 +37,18 @@ type FormState = {
 
 const MAX_SHIFT_HOURS = 16;
 
-function initialState(shift: Shift | null | undefined, defaultDate: Date | null | undefined, roles: RoleWithStaff[]): FormState {
+function initialState(
+    shift: Shift | null | undefined,
+    defaultDate: string | null | undefined,
+    roles: RoleWithStaff[],
+    tz: string
+): FormState {
     if (shift) {
-        const start = new Date(shift.start_time);
         const role = roles.find((r) => r.role_name === shift.role && r.role_id !== null);
         return {
-            date: toDateKey(start),
-            start: toTimeInput(start),
-            end: toTimeInput(new Date(shift.end_time)),
+            date: dateKeyIn(shift.start_time, tz),
+            start: timeIn(shift.start_time, tz),
+            end: timeIn(shift.end_time, tz),
             breakMinutes: String(shift.break_minutes ?? 0),
             roleId: role?.role_id ? String(role.role_id) : "",
             userId: "",
@@ -49,7 +56,7 @@ function initialState(shift: Shift | null | undefined, defaultDate: Date | null 
         };
     }
     return {
-        date: toDateKey(defaultDate ?? new Date()),
+        date: defaultDate ?? todayKey(tz),
         start: "09:00",
         end: "17:00",
         breakMinutes: "30",
@@ -59,31 +66,47 @@ function initialState(shift: Shift | null | undefined, defaultDate: Date | null 
     };
 }
 
-/** Builds start/end Dates. An end time at or before the start rolls into the next day. */
-function resolveTimes(f: FormState): { start: Date; end: Date; overnight: boolean } | null {
+type ResolvedTimes = {
+    /** Wall-clock times at the location, as the API expects them. */
+    startIso: string;
+    endIso: string;
+    overnight: boolean;
+    /** Scheduled length in hours (wall-clock; ignores the rare DST night). */
+    spanHours: number;
+};
+
+/** An end time at or before the start rolls into the next day (overnight shift). */
+function resolveTimes(f: FormState): ResolvedTimes | null {
     if (!f.date || !f.start || !f.end) return null;
-    const start = combine(f.date, f.start);
-    let end = combine(f.date, f.end);
-    const overnight = end <= start;
-    if (overnight) end = addDays(end, 1);
-    return { start, end, overnight };
+    const toMin = (t: string) => {
+        const [h, m] = t.split(":").map(Number);
+        return h * 60 + m;
+    };
+    const overnight = toMin(f.end) <= toMin(f.start);
+    const spanMin = toMin(f.end) - toMin(f.start) + (overnight ? 24 * 60 : 0);
+    return {
+        startIso: naiveLocalIso(f.date, f.start),
+        endIso: naiveLocalIso(overnight ? addDaysToKey(f.date, 1) : f.date, f.end),
+        overnight,
+        spanHours: spanMin / 60,
+    };
 }
 
-export function ShiftFormDialog({ open, onOpenChange, locationId, roles, shift, defaultDate, onSaved }: Props) {
+export function ShiftFormDialog({ open, onOpenChange, locationId, roles, shift, defaultDate, tz, onSaved }: Props) {
     const toast = useToast();
     const editing = !!shift;
-    const [form, setForm] = useState<FormState>(() => initialState(shift, defaultDate, roles));
+    const [form, setForm] = useState<FormState>(() => initialState(shift, defaultDate, roles, tz));
     const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({});
     const [formError, setFormError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
 
     // Reset whenever the dialog opens for a different shift/day (adjusting state on prop change).
-    const openKey = open ? `${shift?.shift_id ?? "new"}-${defaultDate?.getTime() ?? ""}` : null;
+    const openKey = open ? `${shift?.shift_id ?? "new"}-${defaultDate ?? ""}-${tz}` : null;
     const [prevKey, setPrevKey] = useState(openKey);
     if (openKey !== prevKey) {
         setPrevKey(openKey);
         if (openKey) {
-            setForm(initialState(shift, defaultDate, roles));
+            setForm(initialState(shift, defaultDate, roles, tz));
             setErrors({});
             setFormError(null);
         }
@@ -93,7 +116,7 @@ export function ShiftFormDialog({ open, onOpenChange, locationId, roles, shift, 
 
     const times = resolveTimes(form);
     const paidHours = times
-        ? Math.max((times.end.getTime() - times.start.getTime()) / 3_600_000 - Number(form.breakMinutes || 0) / 60, 0)
+        ? Math.max(times.spanHours - Number(form.breakMinutes || 0) / 60, 0)
         : 0;
 
     // Employees for the chosen role, or everyone when no role is chosen.
@@ -114,7 +137,7 @@ export function ShiftFormDialog({ open, onOpenChange, locationId, roles, shift, 
         const brk = Number(form.breakMinutes);
         if (form.breakMinutes !== "" && (!Number.isInteger(brk) || brk < 0)) next.breakMinutes = "Whole minutes, 0 or more.";
         if (times) {
-            const span = (times.end.getTime() - times.start.getTime()) / 3_600_000;
+            const span = times.spanHours;
             if (span > MAX_SHIFT_HOURS) next.end = `Shifts can't be longer than ${MAX_SHIFT_HOURS} hours.`;
             if (brk / 60 >= span) next.breakMinutes = "Break must be shorter than the shift.";
         }
@@ -128,8 +151,9 @@ export function ShiftFormDialog({ open, onOpenChange, locationId, roles, shift, 
         if (!validate() || !times) return;
         setSaving(true);
         const payload = {
-            start_time: toOffsetIso(times.start),
-            end_time: toOffsetIso(times.end),
+            // Naive wall-clock time: the API attaches the location's timezone.
+            start_time: times.startIso,
+            end_time: times.endIso,
             break_minutes: Number(form.breakMinutes || 0),
             role_id: form.roleId ? Number(form.roleId) : null,
             notes: form.notes.trim() || null,

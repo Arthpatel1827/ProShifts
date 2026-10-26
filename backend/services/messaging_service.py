@@ -7,6 +7,7 @@ from models import (
     AppUser, Employment, Role, Shift, ShiftAssignment,
 )
 from services.notification_service import NotificationService
+from utils import timezones as tzu
 
 notif_svc = NotificationService()
 
@@ -194,7 +195,7 @@ class MessagingService:
         ).first():
             raise PermissionError("Not an employee at this shift's location.")
 
-        name = f"Shift {shift.start_time.strftime('%b %d %I:%M %p')}"
+        name = f"Shift {tzu.shift_local_str(shift, '%b %d %I:%M %p')}"
         if shift.role:
             name += f" · {shift.role.name}"
 

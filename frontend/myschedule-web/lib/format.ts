@@ -1,77 +1,133 @@
 // Date/time helpers. Keep every conversion in this file.
 //
-// Two kinds of naive (offset-less) timestamps come from the backend:
-//  • Shift start/end are timestamptz and come back with an offset; send them with one too
-//    (toOffsetIso), otherwise PostgreSQL reads them in the *database server's* timezone.
-//  • Record timestamps (created_at, updated_at, assigned_at) come from datetime.utcnow()
-//    → they are UTC and must be parsed with fromServerUtc, or they display hours off.
+// Scheduling is in the *location's* timezone (Location.timezone), not the browser's:
+// a manager in Toronto looking at a Vancouver location sees Vancouver days and times.
+//  • Shift start/end come back as instants with an offset. Display them with a `tz`.
+//  • Calendar dates are "YYYY-MM-DD" keys; do arithmetic on keys, never on local Dates.
+//  • To create or edit a shift, send naive wall-clock time at the location
+//    (naiveLocalIso); the API attaches the location's timezone.
+//  • Record timestamps (created_at, updated_at) are naive UTC: parse with fromServerUtc.
+//    Messaging shows those in the reader's own browser time.
 
 const LOCALE = "en-CA";
 
-export function toDateKey(d: Date): string {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
+// ── Location-timezone helpers ───────────────────────────────────────────────
+
+/** A valid IANA zone for Intl, falling back to UTC. */
+export function safeTz(tz: string | null | undefined): string {
+    if (!tz) return "UTC";
+    try {
+        new Intl.DateTimeFormat(LOCALE, { timeZone: tz });
+        return tz;
+    } catch {
+        return "UTC";
+    }
 }
 
-export function getMonday(date: Date): Date {
-    const d = new Date(date);
-    const day = d.getDay();
-    d.setDate(d.getDate() - day + (day === 0 ? -6 : 1));
-    d.setHours(0, 0, 0, 0);
-    return d;
+const partsCache = new Map<string, Intl.DateTimeFormat>();
+function partsFormatter(tz: string): Intl.DateTimeFormat {
+    let f = partsCache.get(tz);
+    if (!f) {
+        f = new Intl.DateTimeFormat("en-US", {
+            timeZone: tz,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            hourCycle: "h23",
+        });
+        partsCache.set(tz, f);
+    }
+    return f;
 }
 
-export function addDays(date: Date, days: number): Date {
-    const d = new Date(date);
-    d.setDate(d.getDate() + days);
-    return d;
+function zonedParts(value: string | Date, tz: string) {
+    const d = typeof value === "string" ? new Date(value) : value;
+    const p = Object.fromEntries(partsFormatter(safeTz(tz)).formatToParts(d).map((x) => [x.type, x.value]));
+    return { y: p.year, m: p.month, d: p.day, hh: p.hour === "24" ? "00" : p.hour, mm: p.minute };
+}
+
+/** "YYYY-MM-DD" calendar date of an instant at the location. */
+export function dateKeyIn(value: string | Date, tz: string): string {
+    const p = zonedParts(value, tz);
+    return `${p.y}-${p.m}-${p.d}`;
+}
+
+/** Today's date key at the location. */
+export function todayKey(tz: string): string {
+    return dateKeyIn(new Date(), tz);
+}
+
+/** "HH:MM" (24h) wall-clock time of an instant at the location, for <input type="time">. */
+export function timeIn(value: string | Date, tz: string): string {
+    const p = zonedParts(value, tz);
+    return `${p.hh}:${p.mm}`;
+}
+
+function keyToUtcNoon(key: string): Date {
+    const [y, m, d] = key.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, d, 12));
+}
+
+export function addDaysToKey(key: string, days: number): string {
+    const d = keyToUtcNoon(key);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+}
+
+/** Monday of the week containing `key`. */
+export function mondayOfKey(key: string): string {
+    const dow = keyToUtcNoon(key).getUTCDay(); // 0 = Sunday
+    return addDaysToKey(key, dow === 0 ? -6 : 1 - dow);
+}
+
+/** Formats a date key ("2026-10-25") without any timezone shifting. */
+export function formatKey(key: string, opts: Intl.DateTimeFormatOptions = {}): string {
+    return keyToUtcNoon(key).toLocaleDateString(LOCALE, {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        ...opts,
+        timeZone: "UTC",
+    });
+}
+
+/** Naive wall-clock time at the location — the API attaches the location's timezone. */
+export function naiveLocalIso(dateKey: string, hhmm: string): string {
+    return `${dateKey}T${hhmm}:00`;
 }
 
 export function isSameDay(a: Date, b: Date): boolean {
     return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
-/** "HH:MM" from a Date, for <input type="time">. */
-export function toTimeInput(d: Date): string {
-    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-
-/** "YYYY-MM-DDTHH:MM:00-04:00" in the browser's timezone — accepted by datetime.fromisoformat. */
-export function toOffsetIso(d: Date): string {
-    const offset = -d.getTimezoneOffset();
-    const sign = offset >= 0 ? "+" : "-";
-    const abs = Math.abs(offset);
-    const hh = String(Math.floor(abs / 60)).padStart(2, "0");
-    const mm = String(abs % 60).padStart(2, "0");
-    return `${toDateKey(d)}T${toTimeInput(d)}:00${sign}${hh}:${mm}`;
-}
-
-/** Combine a date key and "HH:MM" into a local Date. */
-export function combine(dateKey: string, time: string): Date {
-    const [y, m, d] = dateKey.split("-").map(Number);
-    const [hh, mm] = time.split(":").map(Number);
-    return new Date(y, m - 1, d, hh, mm, 0, 0);
-}
-
-export function formatTime(iso: string | Date): string {
+/** Time of an instant. Pass the location's tz for shifts; omit it for the viewer's own time. */
+export function formatTime(iso: string | Date, tz?: string): string {
     const d = typeof iso === "string" ? new Date(iso) : iso;
-    return d.toLocaleTimeString(LOCALE, { hour: "numeric", minute: "2-digit", hour12: true });
+    return d.toLocaleTimeString(LOCALE, {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+        ...(tz ? { timeZone: safeTz(tz) } : {}),
+    });
 }
 
-export function formatTimeRange(startIso: string, endIso: string): string {
-    return `${formatTime(startIso)} – ${formatTime(endIso)}`;
+export function formatTimeRange(startIso: string, endIso: string, tz?: string): string {
+    return `${formatTime(startIso, tz)} – ${formatTime(endIso, tz)}`;
 }
 
-export function formatDate(iso: string | Date, opts: Intl.DateTimeFormatOptions = {}): string {
-    const d = typeof iso === "string" ? parseDateish(iso) : iso;
-    return d.toLocaleDateString(LOCALE, { weekday: "short", month: "short", day: "numeric", ...opts });
-}
-
-/** Parses "YYYY-MM-DD" as a local date (not UTC midnight). */
-export function parseDateish(s: string): Date {
-    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? combine(s, "00:00") : new Date(s);
+/** Date of an instant (in `tz`, or the viewer's time) or of a "YYYY-MM-DD" key. */
+export function formatDate(value: string | Date, opts: Intl.DateTimeFormatOptions = {}, tz?: string): string {
+    if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) return formatKey(value, opts);
+    const d = typeof value === "string" ? new Date(value) : value;
+    return d.toLocaleDateString(LOCALE, {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        ...opts,
+        ...(tz ? { timeZone: safeTz(tz) } : {}),
+    });
 }
 
 /** Parses a server record timestamp (naive UTC from datetime.utcnow()). */
