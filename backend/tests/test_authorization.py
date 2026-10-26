@@ -117,3 +117,25 @@ def test_only_owners_and_managers_change_clock_in_rules(app, client, world):
     with app.app_context():
         assert Company.query.get(world.comp_a).clock_in_method == "qr_pin"
         assert Company.query.get(world.comp_b).clock_in_method == "manager_only"
+
+
+def test_settings_report_pin_expiry_but_never_the_pin(app, client, world):
+    url = "/time-entries/settings"
+    assert client.get(url, headers=world.headers(world.manager_a)).get_json()["settings"]["pin_expires_at"] is None
+    pin = client.post(url + "/generate-pin", headers=world.headers(world.manager_a)).get_json()["pin"]
+    s = client.get(url, headers=world.headers(world.staff_a)).get_json()["settings"]
+    assert s["pin_expires_at"] and pin not in str(s)
+
+
+def test_clock_in_is_rate_limited_against_pin_guessing(app, client, world):
+    from extensions import limiter
+    client.put("/time-entries/settings", headers=world.headers(world.manager_a), json={"clock_in_method": "qr_pin"})
+    client.post("/time-entries/settings/generate-pin", headers=world.headers(world.manager_a))
+    limiter.enabled = True
+    try:
+        limiter.reset()
+        codes = [client.post("/time-entries/clock-in", headers=world.headers(world.staff_a),
+                             json={"pin": f"{n:04d}"}).status_code for n in range(12)]
+    finally:
+        limiter.enabled = False
+    assert codes[:10] == [400] * 10 and codes[10:] == [429, 429]

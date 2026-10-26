@@ -2,6 +2,7 @@
 from flask import Blueprint
 from flask_jwt_extended import jwt_required
 from controllers.time_entry_controller import TimeEntryController
+from extensions import limiter
 
 router = Blueprint("time_entries", __name__, url_prefix="/time-entries")
 ctrl   = TimeEntryController()
@@ -22,6 +23,8 @@ def get_history():
 
 @router.post("/clock-in")
 @jwt_required()
+# A daily 4-digit PIN must not be guessable by retrying: 30 tries an hour per person.
+@limiter.limit("10 per minute;30 per hour")
 def clock_in():
     return ctrl.clock_in()
 

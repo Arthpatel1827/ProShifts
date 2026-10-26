@@ -320,12 +320,23 @@ class TimeEntryService:
                 "paid_break":           False,
                 "gps_radius_meters":    100,
             }
+        # Only when the current PIN stops working — the PIN itself is stored hashed and is
+        # shown once, to the manager who generates it.
+        pin_expires_at = None
+        if company.clock_in_pin and company.pin_generated_at:
+            generated = company.pin_generated_at
+            if generated.tzinfo is None:
+                generated = generated.replace(tzinfo=timezone.utc)
+            expires = generated + timedelta(hours=24)
+            if expires > datetime.now(timezone.utc):
+                pin_expires_at = expires.isoformat()
         return {
             "clock_in_method":      company.clock_in_method,
             "break_duration_mins":  company.break_duration_mins,
             "max_breaks_per_shift": company.max_breaks_per_shift,
             "paid_break":           company.paid_break,
             "gps_radius_meters":    company.gps_radius_meters,
+            "pin_expires_at":       pin_expires_at,
         }
 
     # ── Update clock settings (owner/manager only) ────────────────────────────
