@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus } from "lucide-react";
+import { Copy, Plus } from "lucide-react";
 import { ShiftCard } from "./shift-card";
 import { addDaysToKey, dateKeyIn, formatHours, formatKey, shiftHours, todayKey } from "@/lib/format";
 import type { Shift } from "@/lib/types";
@@ -14,9 +14,11 @@ type WeekGridProps = {
     names?: Map<number, string>;
     onAddShift: (dateKey: string) => void;
     onShiftClick: (shift: Shift) => void;
+    /** Copy all of a day's shifts to other days. */
+    onCopyDay?: (dateKey: string, shifts: Shift[]) => void;
 };
 
-export function WeekGrid({ weekStart, tz, shifts, names, onAddShift, onShiftClick }: WeekGridProps) {
+export function WeekGrid({ weekStart, tz, shifts, names, onAddShift, onShiftClick, onCopyDay }: WeekGridProps) {
     const days = Array.from({ length: 7 }, (_, i) => addDaysToKey(weekStart, i));
     const today = todayKey(tz);
 
@@ -61,13 +63,25 @@ export function WeekGrid({ weekStart, tz, shifts, names, onAddShift, onShiftClic
                                     </p>
                                 </div>
 
-                                <button
-                                    onClick={() => onAddShift(day)}
-                                    className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                                    aria-label={`Add shift on ${formatKey(day, { weekday: "long", month: "long", day: "numeric" })}`}
-                                >
-                                    <Plus className="h-3.5 w-3.5" />
-                                </button>
+                                <div className="flex items-center">
+                                    {onCopyDay && dayShifts.some((s) => s.status !== "cancelled") && (
+                                        <button
+                                            onClick={() => onCopyDay(day, dayShifts.filter((s) => s.status !== "cancelled"))}
+                                            className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                                            aria-label={`Copy ${formatKey(day, { weekday: "long", month: "long", day: "numeric" })} to other days`}
+                                            title="Copy this day"
+                                        >
+                                            <Copy className="h-3.5 w-3.5" />
+                                        </button>
+                                    )}
+                                    <button
+                                        onClick={() => onAddShift(day)}
+                                        className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                                        aria-label={`Add shift on ${formatKey(day, { weekday: "long", month: "long", day: "numeric" })}`}
+                                    >
+                                        <Plus className="h-3.5 w-3.5" />
+                                    </button>
+                                </div>
                             </div>
 
                             <div className="flex-1 space-y-2 p-2">

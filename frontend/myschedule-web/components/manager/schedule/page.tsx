@@ -1,12 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Plus, Send, Sparkles } from "lucide-react";
+import { CopyPlus, Plus, Send, Sparkles, Users } from "lucide-react";
 import { WeekNav } from "@/components/manager/schedule/week-nav";
 import { WeekGrid } from "@/components/manager/schedule/week-grid";
 import { ShiftFormDialog } from "@/components/manager/schedule/shift-form-dialog";
 import { ShiftDetailDialog } from "@/components/manager/schedule/shift-detail-dialog";
 import { ScheduleCopilotDialog } from "@/components/manager/ai/schedule-copilot-dialog";
+import { BulkAddDialog } from "@/components/manager/schedule/bulk-add-dialog";
+import { CopyShiftsDialog, type CopyRequest } from "@/components/manager/schedule/copy-shifts-dialog";
 import { useManager } from "@/components/manager/manager-context";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
@@ -15,7 +17,7 @@ import { useToast } from "@/components/ui/toast";
 import { getLaborCost, listShifts, publishWeek, rolesWithStaff } from "@/lib/api/shifts";
 import { useQuery } from "@/lib/hooks/use-query";
 import { useLiveRefresh } from "@/lib/hooks/use-socket";
-import { addDaysToKey, formatHours, formatMoney, mondayOfKey, todayKey } from "@/lib/format";
+import { addDaysToKey, dateKeyIn, formatHours, formatKey, formatMoney, mondayOfKey, todayKey } from "@/lib/format";
 import type { Shift } from "@/lib/types";
 
 export default function SchedulePage() {
@@ -47,6 +49,35 @@ export default function SchedulePage() {
     const [confirmPublish, setConfirmPublish] = useState(false);
     const [publishing, setPublishing] = useState(false);
     const [copilotOpen, setCopilotOpen] = useState(false);
+    const [bulkOpen, setBulkOpen] = useState(false);
+    const [copyReq, setCopyReq] = useState<CopyRequest | null>(null);
+    const [loadingLastWeek, setLoadingLastWeek] = useState(false);
+
+    function refreshWeek() {
+        void shifts.refetch();
+        void labor.refetch();
+    }
+
+    const shortDate = (k: string) => formatKey(k, { weekday: undefined, month: "short", day: "numeric", year: undefined });
+    const weekRange = (k: string) => `${shortDate(k)} – ${shortDate(addDaysToKey(k, 6))}`;
+
+    async function openCopyLastWeek() {
+        if (!locationId) return;
+        setLoadingLastWeek(true);
+        try {
+            const prevKey = addDaysToKey(weekKey, -7);
+            const prev = (await listShifts(locationId, prevKey)).filter((s) => s.status !== "cancelled");
+            if (!prev.length) {
+                toast.info("Nothing to copy", `There are no shifts in the week of ${weekRange(prevKey)}.`);
+                return;
+            }
+            setCopyReq({ mode: "week", title: "Copy last week", shifts: prev, fromLabel: weekRange(prevKey), toLabel: weekRange(weekKey) });
+        } catch (err) {
+            toast.error("Couldn't load last week", err instanceof Error ? err.message : undefined);
+        } finally {
+            setLoadingLastWeek(false);
+        }
+    }
 
     const names = useMemo(() => {
         const map = new Map<number, string>();
@@ -106,6 +137,12 @@ export default function SchedulePage() {
                 />
 
                 <div className="flex flex-wrap items-center gap-2">
+                    <Button variant="outline" size="lg" onClick={openCopyLastWeek} disabled={loadingLastWeek || !locationId}>
+                        <CopyPlus /> Copy last week
+                    </Button>
+                    <Button variant="outline" size="lg" onClick={() => setBulkOpen(true)} disabled={!locationId}>
+                        <Users /> Bulk add
+                    </Button>
                     <Button variant="outline" size="lg" onClick={() => setCopilotOpen(true)} className="border-primary/30 text-primary hover:bg-primary/5 hover:text-primary">
                         <Sparkles /> AI Schedule Copilot
                     </Button>
@@ -148,6 +185,9 @@ export default function SchedulePage() {
                     names={names}
                     onAddShift={openCreate}
                     onShiftClick={setSelected}
+                    onCopyDay={(day, dayShifts) =>
+                        setCopyReq({ mode: "days", title: `Copy ${formatKey(day, { weekday: "long", month: "short", day: "numeric" })}`, shifts: dayShifts, sourceDate: day })
+                    }
                 />
             )}
 
@@ -161,6 +201,31 @@ export default function SchedulePage() {
                     defaultDate={newDate}
                     tz={tz}
                     onSaved={upsert}
+                />
+            )}
+
+            {locationId && (
+                <BulkAddDialog
+                    open={bulkOpen}
+                    onOpenChange={setBulkOpen}
+                    locationId={locationId}
+                    weekStart={weekKey}
+                    tz={tz}
+                    roles={roles.data ?? []}
+                    names={names}
+                    onCreated={refreshWeek}
+                />
+            )}
+
+            {locationId && (
+                <CopyShiftsDialog
+                    request={copyReq}
+                    onClose={() => setCopyReq(null)}
+                    locationId={locationId}
+                    weekStart={weekKey}
+                    tz={tz}
+                    names={names}
+                    onCopied={refreshWeek}
                 />
             )}
 
@@ -186,6 +251,15 @@ export default function SchedulePage() {
                 names={names}
                 onEdit={openEdit}
                 onChanged={upsert}
+                onDuplicate={(shift) => {
+                    setSelected(null);
+                    setCopyReq({
+                        mode: "days",
+                        title: "Duplicate shift",
+                        shifts: [shift],
+                        sourceDate: dateKeyIn(shift.start_time, tz),
+                    });
+                }}
             />
 
             <ConfirmDialog

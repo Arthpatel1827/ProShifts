@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Clock, Coffee, MessageSquare, Pencil, StickyNote, Trash2, UserMinus, UserPlus } from "lucide-react";
+import { Clock, Coffee, Copy, MessageSquare, Pencil, StickyNote, Trash2, UserMinus, UserPlus } from "lucide-react";
 import { Dialog, ConfirmDialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/form";
@@ -23,9 +23,11 @@ type Props = {
     names: Map<number, string>;
     onEdit: (shift: Shift) => void;
     onChanged: (shift: Shift) => void;
+    /** Copy this shift to other days. */
+    onDuplicate?: (shift: Shift) => void;
 };
 
-export function ShiftDetailDialog({ shift, tz, onOpenChange, roles, names, onEdit, onChanged }: Props) {
+export function ShiftDetailDialog({ shift, tz, onOpenChange, roles, names, onEdit, onChanged, onDuplicate }: Props) {
     const toast = useToast();
     const [assignee, setAssignee] = useState("");
     const [busy, setBusy] = useState<string | null>(null);
@@ -115,6 +117,11 @@ export function ShiftDetailDialog({ shift, tz, onOpenChange, roles, names, onEdi
                             >
                                 <Trash2 /> Cancel shift
                             </Button>
+                            {onDuplicate && (
+                                <Button variant="outline" onClick={() => onDuplicate(shift)} disabled={!!busy}>
+                                    <Copy /> Duplicate
+                                </Button>
+                            )}
                             <Button variant="outline" onClick={() => onEdit(shift)} disabled={!!busy}>
                                 <Pencil /> Edit
                             </Button>

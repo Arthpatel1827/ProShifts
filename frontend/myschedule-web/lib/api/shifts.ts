@@ -62,3 +62,47 @@ export async function rolesWithStaff(locationId: number): Promise<RoleWithStaff[
     );
     return res.roles;
 }
+
+export type BulkRow = {
+    user_id: number;
+    role_id: number | null;
+    start_time: string; // "HH:MM" at the location
+    end_time: string;
+    days: number[]; // 0 = Monday … 6 = Sunday
+    break_minutes: number;
+};
+
+export type BulkResult = {
+    created_count: number;
+    created_ids: number[];
+    skipped: { index: number; user_id?: number; day?: string; reason: string }[];
+};
+
+/** Creates one draft shift per person per selected day; conflicts are skipped and reported. */
+export function bulkCreateWeek(locationId: number, weekStart: string, rows: BulkRow[]): Promise<BulkResult> {
+    return api.post<BulkResult>("/shifts/bulk-week", { location_id: locationId, week_start: weekStart, rows });
+}
+
+export type CopyResult = {
+    created_count: number;
+    created_ids: number[];
+    /** Existing open shifts in the same slot that received the copied staff. */
+    filled_count: number;
+    filled_ids: number[];
+    skipped: { index: number; shift_id?: number; date?: string; reason: string }[];
+    /** Staff who couldn't be carried over; their copied shift was left open. */
+    unassigned: { shift_id: number; user_id: number; name: string | null; date: string; reason: string }[];
+};
+
+/** Copies shifts to other dates (same wall-clock times) as drafts. */
+export function copyShifts(
+    locationId: number,
+    items: { shift_id: number; date: string }[],
+    includeAssignees: boolean
+): Promise<CopyResult> {
+    return api.post<CopyResult>("/shifts/copy", {
+        location_id: locationId,
+        items,
+        include_assignees: includeAssignees,
+    });
+}
