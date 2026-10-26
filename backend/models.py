@@ -180,6 +180,8 @@ class Shift(db.Model):
     assignments  = db.relationship("ShiftAssignment", back_populates="shift", cascade="all, delete-orphan")
     swaps        = db.relationship("ShiftSwap", back_populates="shift", cascade="all, delete-orphan", foreign_keys="[ShiftSwap.shift_id]")
     time_entries = db.relationship("TimeEntry",       back_populates="shift", cascade="all, delete-orphan")
+    breaks       = db.relationship("ShiftBreak", back_populates="shift", cascade="all, delete-orphan",
+                                   order_by="ShiftBreak.start_time")
 
     __table_args__ = (
         CheckConstraint(
@@ -187,6 +189,21 @@ class Shift(db.Model):
             name="ck_shift_status",
         ),
     )
+
+
+# ── 8b. ShiftBreak ────────────────────────────────────────────────────────────
+class ShiftBreak(db.Model):
+    """A *scheduled* break inside a shift (when the break is planned). What was actually
+    taken lives in BreakEntry on the time entry; editing one never touches the other.
+    Shift.break_minutes stays the total, so labor cost and the AI keep working."""
+    __tablename__ = "shift_break"
+
+    break_id   = db.Column(BigInteger, primary_key=True)
+    shift_id   = db.Column(BigInteger, db.ForeignKey("shift.shift_id", ondelete="CASCADE"), nullable=False, index=True)
+    start_time = db.Column(DateTime(timezone=True), nullable=False)
+    end_time   = db.Column(DateTime(timezone=True), nullable=False)
+
+    shift = db.relationship("Shift", back_populates="breaks")
 
 
 # ── 9. ShiftAssignment ────────────────────────────────────────────────────────

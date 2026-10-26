@@ -21,6 +21,11 @@ def my_shifts():
 def labor_cost():
     return ctrl.labor_cost()
 
+@router.get("/week-status")
+@jwt_required()
+def week_status():
+    return ctrl.week_status()
+
 @router.get("/roles-with-staff")
 @jwt_required()
 def roles_with_staff():
@@ -50,6 +55,11 @@ def copy_shifts():
 @jwt_required()
 def update_shift(shift_id):
     return ctrl.update_shift(shift_id)
+
+@router.post("/<int:shift_id>/move")
+@jwt_required()
+def move_shift(shift_id):
+    return ctrl.move_shift(shift_id)
 
 @router.delete("/<int:shift_id>")
 @jwt_required()

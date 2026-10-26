@@ -120,7 +120,10 @@ def create_app():
     # `flask db …` commands must let Alembic own the schema: creating tables here first
     # makes the initial migration fail with "relation already exists" on a fresh database.
     # Matches both `flask db upgrade` and `flask --app app.py db upgrade`.
-    running_migrations = os.path.basename(sys.argv[0]).startswith("flask") and "db" in sys.argv[1:4]
+    # `python -m flask db …` (what Windows needs) runs flask/__main__.py, so check the path too.
+    argv0 = sys.argv[0].replace("\\", "/")
+    is_flask_cli = os.path.basename(argv0).startswith("flask") or argv0.endswith("flask/__main__.py")
+    running_migrations = is_flask_cli and "db" in sys.argv[1:4]
     if not running_migrations:
         with app.app_context():
             from extensions import db

@@ -2,10 +2,17 @@
 from datetime import datetime
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
-from services.shift_service import OutsideAvailability, ShiftService
+from services.shift_service import (
+    NeedsAvailabilityOverride, OutsideAvailability, ScheduleConflict, ShiftService,
+)
 from services.rbac_service import require_location_role
 
 svc = ShiftService()
+
+
+def _schedule_error(e):
+    """409 + the per-person check, so the UI can say exactly who and why."""
+    return jsonify({"error": str(e), "code": e.code, "placements": getattr(e, "placements", [])}), 409
 
 
 class ShiftController:
@@ -70,9 +77,10 @@ class ShiftController:
         caller_id = int(get_jwt_identity())
         data      = request.get_json(silent=True) or {}
         kwargs    = {"shift_id": shift_id, "caller_user_id": caller_id}
-        for field in ("role_id", "break_minutes", "notes"):
+        for field in ("role_id", "break_minutes", "notes", "breaks"):
             if field in data:
                 kwargs[field] = data[field]
+        kwargs["allow_outside_availability"] = bool(data.get("allow_outside_availability"))
         if "start_time" in data:
             try:
                 kwargs["start_time"] = datetime.fromisoformat(data["start_time"])
@@ -85,10 +93,52 @@ class ShiftController:
                 return jsonify({"error": "Invalid end_time"}), 400
         try:
             shift = svc.update_shift(**kwargs)
-            return jsonify({"shift": svc.serialize(shift)}), 200
+            return jsonify({"shift": svc.serialize(shift), "warnings": getattr(shift, "_warnings", [])}), 200
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
+        except (ScheduleConflict, NeedsAvailabilityOverride) as e:
+            return _schedule_error(e)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+    def week_status(self):
+        caller_id   = int(get_jwt_identity())
+        location_id = request.args.get("location_id", type=int)
+        if not location_id:
+            return jsonify({"error": "location_id is required"}), 400
+        try:
+            items = svc.week_status(caller_user_id=caller_id, location_id=location_id,
+                                    week_start=request.args.get("week_start"))
+            return jsonify({"items": items}), 200
         except PermissionError as e:
             return jsonify({"error": str(e)}), 403
         except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+    def move_shift(self, shift_id):
+        """Drag & drop: one validated change of day, start time and/or person."""
+        caller_id = int(get_jwt_identity())
+        data = request.get_json(silent=True) or {}
+        try:
+            result = svc.move_shift(
+                shift_id=shift_id, caller_user_id=caller_id,
+                date=data.get("date"), start=data.get("start"),
+                from_user_id=data.get("from_user_id"), to_user_id=data.get("to_user_id"),
+                allow_outside_availability=bool(data.get("allow_outside_availability")),
+                dry_run=bool(data.get("dry_run")),
+            )
+            return jsonify({
+                "shift": svc.serialize(result["shift"]),
+                "applied": result["applied"],
+                "warnings": [w["message"] for w in result["warnings"]],
+                "placements": result["placements"],
+                "undo": result["undo"],
+            }), 200
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
+        except (ScheduleConflict, NeedsAvailabilityOverride) as e:
+            return _schedule_error(e)
+        except (ValueError, TypeError) as e:
             return jsonify({"error": str(e)}), 400
 
     def cancel_shift(self, shift_id):
@@ -172,9 +222,9 @@ class ShiftController:
         if not user_id:
             return jsonify({"error": "user_id is required"}), 400
         try:
-            svc.assign_user(shift_id=shift_id, user_id=user_id, caller_user_id=caller_id,
-                            allow_outside_availability=bool(data.get("allow_outside_availability")))
-            return jsonify({"message": "User assigned successfully"}), 200
+            a = svc.assign_user(shift_id=shift_id, user_id=user_id, caller_user_id=caller_id,
+                                allow_outside_availability=bool(data.get("allow_outside_availability")))
+            return jsonify({"message": "User assigned successfully", "warnings": getattr(a, "_warnings", [])}), 200
         except PermissionError as e:
             return jsonify({"error": str(e)}), 403
         except OutsideAvailability as e:
