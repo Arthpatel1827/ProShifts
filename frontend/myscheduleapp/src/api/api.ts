@@ -189,6 +189,14 @@ export const SwapsAPI = {
         reason?: string;
     }) => api.post('/swaps/targeted', body),
 
+    // Resulting-schedule check before sending a swap or an offer
+    preview: (body: {
+        shift_id?: number;
+        receiving_user_id?: number;
+        offered_shift_id: number;
+        swap_id?: number;
+    }) => api.post('/swaps/preview', body),
+
     // Offer flow
     makeOffer: (swap_id: number, offered_shift_id: number) =>
         api.post(`/swaps/${swap_id}/offer`, { offered_shift_id }),
@@ -229,8 +237,8 @@ export const SwapsAPI = {
     pendingManager: (location_id: number) =>
         api.get('/swaps/pending-manager', { params: { location_id } }),
 
-    managerDecide: (swap_id: number, approve: boolean) =>
-        api.post(`/swaps/${swap_id}/decide`, { approve }),
+    managerDecide: (swap_id: number, approve: boolean, allow_outside_availability = false) =>
+        api.post(`/swaps/${swap_id}/decide`, { approve, allow_outside_availability }),
 };
 
 // ── Drops API ──────────────────────────────────────────────────────────────────

@@ -4,8 +4,28 @@ from extensions import db
 from models import ShiftSwap, ShiftAssignment, Shift, Employment, AppUser
 from services.notification_service import NotificationService
 from utils import timezones as tzu
+from utils.schedule_rules import check_placement
 
 notif_svc = NotificationService()
+
+
+class SwapConflict(ValueError):
+    """The swap would leave someone with an impossible schedule (overlap, time off,
+    not active). Never applied, whoever asks — including a manager approving it."""
+    code = "SWAP_CONFLICT"
+
+    def __init__(self, message, validation):
+        super().__init__(message)
+        self.validation = validation
+
+
+class SwapNeedsOverride(ValueError):
+    """Only availability is in the way: a manager may approve anyway (as when assigning)."""
+    code = "OUTSIDE_AVAILABILITY"
+
+    def __init__(self, message, validation):
+        super().__init__(message)
+        self.validation = validation
 
 
 class SwapService:
@@ -44,6 +64,11 @@ class SwapService:
         self._assert_shift_available(shift_id)
         self._assert_shift_available(offered_shift_id)
         self._assert_no_pending(shift_id, requesting_user_id)
+        self._assert_same_location_staff(shift_id, offered_shift_id, requesting_user_id, receiving_user_id)
+        self._raise_if_conflict(self.evaluate(
+            shift_id=shift_id, requesting_user_id=requesting_user_id,
+            offered_shift_id=offered_shift_id, receiving_user_id=receiving_user_id,
+        ))
 
         swap = ShiftSwap(
             shift_id=shift_id,
@@ -84,6 +109,11 @@ class SwapService:
 
         self._assert_assigned(offered_shift_id, user_id)
         self._assert_shift_available(offered_shift_id)
+        self._assert_same_location_staff(swap.shift_id, offered_shift_id, swap.requesting_user_id, user_id)
+        self._raise_if_conflict(self.evaluate(
+            shift_id=swap.shift_id, requesting_user_id=swap.requesting_user_id,
+            offered_shift_id=offered_shift_id, receiving_user_id=user_id,
+        ))
 
         swap.receiving_user_id = user_id
         swap.offered_shift_id  = offered_shift_id
@@ -134,6 +164,9 @@ class SwapService:
                 raise PermissionError("Only the intended receiver can accept.")
             if swap.status != "pending":
                 raise ValueError("Swap is no longer pending.")
+
+        # The schedule may have changed since the request: check the result again.
+        self._raise_if_conflict(self.evaluate_swap(swap))
 
         swap.status = "accepted"
         db.session.commit()
@@ -193,7 +226,8 @@ class SwapService:
         return swap
 
     # ── Manager approve/reject ────────────────────────────────────────────────
-    def manager_decide(self, *, swap_id: int, manager_user_id: int, approve: bool) -> dict:
+    def manager_decide(self, *, swap_id: int, manager_user_id: int, approve: bool,
+                       allow_outside_availability: bool = False) -> dict:
         swap = self._get(swap_id)
         if swap.status != "accepted":
             raise ValueError("Swap must be accepted by both parties first.")
@@ -201,27 +235,30 @@ class SwapService:
         shift = Shift.query.get(swap.shift_id)
         self._assert_manager(manager_user_id, shift.location_id)
 
-        conflicts = self.check_conflicts(swap)
-
+        validation = None
         if approve:
-            # Swap requester's shift → receiver
+            # Never trust the check made when the swap was requested: the schedule may
+            # have changed since. Recalculate the resulting schedule now.
+            validation = self.evaluate_swap(swap)
+            self._raise_if_conflict(validation)
+            if validation["needs_override"] and not allow_outside_availability:
+                raise SwapNeedsOverride(
+                    "; ".join(validation["availability"]) + ". Approve anyway?", validation
+                )
+
             req_assignment = ShiftAssignment.query.filter_by(
                 shift_id=swap.shift_id, user_id=swap.requesting_user_id
             ).first()
-            if req_assignment:
-                req_assignment.user_id     = swap.receiving_user_id
-                req_assignment.assigned_by = manager_user_id
-                req_assignment.assigned_at = datetime.utcnow()
-
-            # Swap receiver's shift → requester
-            if swap.offered_shift_id:
-                rec_assignment = ShiftAssignment.query.filter_by(
-                    shift_id=swap.offered_shift_id, user_id=swap.receiving_user_id
-                ).first()
-                if rec_assignment:
-                    rec_assignment.user_id     = swap.requesting_user_id
-                    rec_assignment.assigned_by = manager_user_id
-                    rec_assignment.assigned_at = datetime.utcnow()
+            rec_assignment = ShiftAssignment.query.filter_by(
+                shift_id=swap.offered_shift_id, user_id=swap.receiving_user_id
+            ).first() if swap.offered_shift_id else None
+            now = datetime.utcnow()
+            # Swap requester's shift → receiver; receiver's shift → requester.
+            req_assignment.user_id, req_assignment.assigned_by, req_assignment.assigned_at = (
+                swap.receiving_user_id, manager_user_id, now)
+            if rec_assignment:
+                rec_assignment.user_id, rec_assignment.assigned_by, rec_assignment.assigned_at = (
+                    swap.requesting_user_id, manager_user_id, now)
 
             swap.status           = "approved"
             swap.manager_approved = True
@@ -230,6 +267,9 @@ class SwapService:
             swap.manager_approved = False
 
         db.session.commit()
+        import logging
+        logging.getLogger("proshifts.audit").info(
+            "swap %s %s by user %s", swap_id, "approved" if approve else "rejected", manager_user_id)
 
         # Notify both parties
         status_word = "approved" if approve else "rejected"
@@ -243,59 +283,97 @@ class SwapService:
                     data={"swap_id": swap_id},
                 )
 
-        return {"swap": swap, "conflicts": conflicts}
+        return {"swap": swap, "conflicts": self._legacy_conflicts(validation) if validation else {"requester": [], "receiver": []},
+                "validation": validation}
+
+    # ── Resulting-schedule validation ─────────────────────────────────────────
+    def evaluate_swap(self, swap: ShiftSwap) -> dict:
+        return self.evaluate(
+            shift_id=swap.shift_id, requesting_user_id=swap.requesting_user_id,
+            offered_shift_id=swap.offered_shift_id, receiving_user_id=swap.receiving_user_id,
+        )
+
+    def evaluate(self, *, shift_id, requesting_user_id, offered_shift_id, receiving_user_id) -> dict:
+        """Apply the swap in memory and run the normal scheduling rules on the result.
+
+        Requester gives `shift_id` and receives `offered_shift_id`; the receiver does the
+        opposite. Each person is checked against their schedule *after* the swap: the
+        shift they give up no longer counts, everything else they work still does."""
+        give = Shift.query.get(shift_id)
+        take = Shift.query.get(offered_shift_id) if offered_shift_id else None
+        errors, availability, warnings = [], [], []
+        result = {"requester": None, "receiver": None}
+
+        def still_assigned(sh, uid, label):
+            if not sh or sh.status != "published":
+                errors.append(f"{label} is no longer on the published schedule.")
+                return False
+            if not ShiftAssignment.query.filter_by(shift_id=sh.shift_id, user_id=uid).first():
+                errors.append(f"{self._name(uid)} is no longer assigned to {label.lower()}.")
+                return False
+            return True
+
+        ok_give = still_assigned(give, requesting_user_id, "The shift being given")
+        ok_take = True
+        if offered_shift_id:
+            ok_take = still_assigned(take, receiving_user_id, "The shift offered in return")
+
+        def place(uid, gains, gives_id, role):
+            p = check_placement(
+                user_id=uid, location_id=gains.location_id,
+                start=gains.start_time, end=gains.end_time, break_minutes=gains.break_minutes,
+                role_id=gains.role_id, ignore_shift_ids=[gives_id],
+            )
+            d = p.to_dict()
+            d.update({"gives": self._serialize_shift(Shift.query.get(gives_id)) if gives_id else None,
+                      "receives": self._serialize_shift(gains)})
+            errors.extend(e["message"] for e in p.errors)
+            if p.availability:
+                availability.append(p.availability)
+            warnings.extend(w["message"] for w in p.warnings)
+            result[role] = d
+
+        if receiving_user_id and ok_give and ok_take:
+            if take is not None:
+                place(requesting_user_id, take, shift_id, "requester")
+            place(receiving_user_id, give, offered_shift_id, "receiver")
+
+        return {
+            "ok": not errors,
+            "needs_override": bool(availability) and not errors,
+            "errors": errors,
+            "availability": availability,
+            "warnings": warnings,
+            **result,
+        }
+
+    @staticmethod
+    def _raise_if_conflict(validation: dict):
+        if validation["errors"]:
+            raise SwapConflict("This swap can't go ahead: " + "; ".join(validation["errors"]) + ".", validation)
+
+    def _legacy_conflicts(self, validation: dict) -> dict:
+        """The older {requester: [shift], receiver: [shift]} shape, kept for existing clients."""
+        out = {"requester": [], "receiver": []}
+        for role in ("requester", "receiver"):
+            for e in (validation.get(role) or {}).get("errors", []):
+                if e.get("code") == "OVERLAP" and e.get("shift_id"):
+                    sh = Shift.query.get(e["shift_id"])
+                    if sh:
+                        out[role].append({
+                            "shift_id": sh.shift_id,
+                            "start_time": sh.start_time.isoformat(),
+                            "end_time": sh.end_time.isoformat(),
+                            "role": sh.role.name if sh.role else None,
+                        })
+        return out
 
     # ── Conflict check ────────────────────────────────────────────────────────
     def check_conflicts(self, swap: ShiftSwap) -> dict:
-        """Check if either party's new shift conflicts with their other assignments."""
-        req_shift = Shift.query.get(swap.shift_id)       # requester gives this up
-        off_shift = Shift.query.get(swap.offered_shift_id) if swap.offered_shift_id else None  # requester receives this
-
-        conflicts = {"requester": [], "receiver": []}
-
-        if off_shift:
-            # Does requester's new shift (off_shift) conflict with their other shifts?
-            req_others = (
-                db.session.query(Shift)
-                .join(ShiftAssignment, ShiftAssignment.shift_id == Shift.shift_id)
-                .filter(
-                    ShiftAssignment.user_id == swap.requesting_user_id,
-                    Shift.shift_id != swap.shift_id,       # excluding the one they're giving up
-                    Shift.status   == "published",
-                )
-                .all()
-            )
-            for s in req_others:
-                if self._overlaps(off_shift, s):
-                    conflicts["requester"].append({
-                        "shift_id":   s.shift_id,
-                        "start_time": s.start_time.isoformat(),
-                        "end_time":   s.end_time.isoformat(),
-                        "role":       s.role.name if s.role else None,
-                    })
-
-        if req_shift and swap.receiving_user_id:
-            # Does receiver's new shift (req_shift) conflict with their other shifts?
-            rec_others = (
-                db.session.query(Shift)
-                .join(ShiftAssignment, ShiftAssignment.shift_id == Shift.shift_id)
-                .filter(
-                    ShiftAssignment.user_id == swap.receiving_user_id,
-                    Shift.shift_id != swap.offered_shift_id,  # excluding the one they're giving up
-                    Shift.status   == "published",
-                )
-                .all()
-            )
-            for s in rec_others:
-                if self._overlaps(req_shift, s):
-                    conflicts["receiver"].append({
-                        "shift_id":   s.shift_id,
-                        "start_time": s.start_time.isoformat(),
-                        "end_time":   s.end_time.isoformat(),
-                        "role":       s.role.name if s.role else None,
-                    })
-
-        return conflicts
+        """Overlaps either party would have after the swap (older response shape)."""
+        if not swap.receiving_user_id:
+            return {"requester": [], "receiver": []}
+        return self._legacy_conflicts(self.evaluate_swap(swap))
 
     # ── Queries ───────────────────────────────────────────────────────────────
     def get_my_swaps(self, user_id: int):
@@ -396,7 +474,12 @@ class SwapService:
         }
 
         if include_conflicts:
-            result["conflicts"] = self.check_conflicts(swap)
+            if swap.receiving_user_id and swap.status in ("pending", "offer_pending", "accepted"):
+                validation = self.evaluate_swap(swap)
+                result["conflicts"] = self._legacy_conflicts(validation)
+                result["validation"] = validation
+            else:
+                result["conflicts"] = {"requester": [], "receiver": []}
 
         return result
 
@@ -426,6 +509,21 @@ class SwapService:
     def _assert_assigned(shift_id: int, user_id: int):
         if not ShiftAssignment.query.filter_by(shift_id=shift_id, user_id=user_id).first():
             raise ValueError("You are not assigned to this shift.")
+
+    @staticmethod
+    def _name(user_id) -> str:
+        u = AppUser.query.get(user_id) if user_id else None
+        return (u.display_name or u.username) if u else "Someone"
+
+    @staticmethod
+    def _assert_same_location_staff(shift_id, offered_shift_id, requester_id, receiver_id):
+        """Both shifts at one location, both people active there: no cross-company swaps."""
+        a, b = Shift.query.get(shift_id), Shift.query.get(offered_shift_id)
+        if not a or not b or a.location_id != b.location_id:
+            raise ValueError("Both shifts must be at the same location.")
+        for uid in (requester_id, receiver_id):
+            if not Employment.query.filter_by(user_id=uid, location_id=a.location_id, status="active").first():
+                raise ValueError("Both people must be active employees at this location.")
 
     @staticmethod
     def _assert_shift_available(shift_id: int):

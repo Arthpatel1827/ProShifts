@@ -7,6 +7,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons }     from '@expo/vector-icons';
 import { colors }       from '../../theme/colors';
+import SwapReview, { SwapValidation } from '../../components/SwapReview';
 import { SwapsAPI, DropsAPI, TimeOffAPI, AdminAPI } from '../../api/api';
 import { AuthContext }  from '../../context/AuthContext';
 
@@ -30,6 +31,8 @@ type Swap = {
     shift:          ShiftInfo | null;
     offered_shift?: ShiftInfo | null;
     conflicts?:     { requester: any[]; receiver: any[] };
+    /** Server's check of both schedules after the swap (recalculated on every load). */
+    validation?:    SwapValidation;
 };
 
 type Drop = {
@@ -155,29 +158,45 @@ export default function AdminRequestsScreen({ route, navigation }: any) {
     // ── Swap decide ───────────────────────────────────────────────────────────
     const decideSwap = (swap: Swap, approve: boolean) => {
         const action = approve ? 'Approve' : 'Reject';
-        const hasConflicts = (swap.conflicts?.requester?.length ?? 0) + (swap.conflicts?.receiver?.length ?? 0) > 0;
+        const v = swap.validation;
+        if (approve && v && !v.ok) {
+            Alert.alert('Swap can\'t be approved', v.errors.join('\n'));
+            return;
+        }
+        const needsOverride = approve && !!v?.needs_override;
+
+        const run = async (allow: boolean) => {
+            setActing(`swap-${swap.swap_id}`);
+            try {
+                await SwapsAPI.managerDecide(swap.swap_id, approve, allow);
+                await fetchAll();
+            } catch (e: any) {
+                const body = e?.response?.data;
+                await fetchAll(); // the schedule may have changed: show the fresh check
+                if (body?.code === 'OUTSIDE_AVAILABILITY') {
+                    Alert.alert('Approve anyway?', body.error, [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Approve anyway', onPress: () => run(true) },
+                    ]);
+                } else {
+                    Alert.alert(body?.code === 'SWAP_CONFLICT' ? 'Conflict detected' : 'Error', body?.error ?? 'Failed.');
+                }
+            } finally {
+                setActing(null);
+            }
+        };
 
         Alert.alert(
-            `${action} Swap`,
-            approve && hasConflicts
-                ? `⚠️ There are scheduling conflicts. Are you sure you want to approve?`
+            needsOverride ? 'Approve anyway?' : `${action} Swap`,
+            needsOverride
+                ? `${v!.availability.join('\n')}\n\nApprove the swap anyway?`
                 : `${action} the swap between ${swap.requester.name} and ${swap.receiver?.name}?`,
             [
                 { text: 'Cancel', style: 'cancel' },
                 {
-                    text: action,
+                    text: needsOverride ? 'Approve anyway' : action,
                     style: approve ? 'default' : 'destructive',
-                    onPress: async () => {
-                        setActing(`swap-${swap.swap_id}`);
-                        try {
-                            await SwapsAPI.managerDecide(swap.swap_id, approve);
-                            await fetchAll();
-                        } catch (e: any) {
-                            Alert.alert('Error', e?.response?.data?.error ?? 'Failed.');
-                        } finally {
-                            setActing(null);
-                        }
-                    },
+                    onPress: () => run(needsOverride),
                 },
             ]
         );
@@ -242,7 +261,8 @@ export default function AdminRequestsScreen({ route, navigation }: any) {
         const isBusy = acting === `swap-${swap.swap_id}`;
         const reqConflicts = swap.conflicts?.requester ?? [];
         const recConflicts = swap.conflicts?.receiver  ?? [];
-        const hasConflicts = reqConflicts.length > 0 || recConflicts.length > 0;
+        const blocked = swap.validation ? !swap.validation.ok : false;
+        const hasConflicts = blocked || reqConflicts.length > 0 || recConflicts.length > 0;
 
         return (
             <View style={styles.card}>
@@ -320,8 +340,10 @@ export default function AdminRequestsScreen({ route, navigation }: any) {
 
                 {swap.reason && <Text style={styles.reason}>"{swap.reason}"</Text>}
 
-                {/* Conflict detail */}
-                {hasConflicts && (
+                {swap.validation && <SwapReview validation={swap.validation} perspective="manager" />}
+
+                {/* Conflict detail (older servers without the full check) */}
+                {!swap.validation && hasConflicts && (
                     <View style={styles.conflictDetail}>
                         <Ionicons name="warning" size={14} color={colors.error} />
                         <Text style={styles.conflictDetailText}>
@@ -343,18 +365,18 @@ export default function AdminRequestsScreen({ route, navigation }: any) {
                     <Pressable
                         style={[
                             styles.approveBtn,
-                            hasConflicts && { backgroundColor: colors.warning },
+                            blocked && { backgroundColor: colors.gray },
                             isBusy && { opacity: 0.5 },
                         ]}
                         onPress={() => decideSwap(swap, true)}
-                        disabled={isBusy}
+                        disabled={isBusy || blocked}
                     >
                         {isBusy
                             ? <ActivityIndicator size="small" color="#fff" />
                             : <>
                                 <Ionicons name="checkmark" size={16} color="#fff" />
                                 <Text style={styles.approveBtnText}>
-                                    {hasConflicts ? 'Approve Anyway' : 'Approve'}
+                                    {blocked ? 'Can\'t approve' : 'Approve'}
                                 </Text>
                             </>
                         }

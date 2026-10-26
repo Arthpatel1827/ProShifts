@@ -2,11 +2,16 @@
 from services.rbac_service import require_location_role
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
-from services.swap_service import SwapService
+from services.swap_service import SwapService, SwapConflict, SwapNeedsOverride
 from models import Employment, Shift, ShiftAssignment
 from extensions import db
 
 svc = SwapService()
+
+
+def _conflict_response(e):
+    """409 with the resulting-schedule check, so the app can show what goes wrong."""
+    return jsonify({"error": str(e), "code": e.code, "validation": e.validation}), 409
 
 
 class SwapController:
@@ -45,6 +50,8 @@ class SwapController:
                 reason=reason,
             )
             return jsonify({"message": "Targeted swap sent", "swap": svc.serialize(swap)}), 201
+        except SwapConflict as e:
+            return _conflict_response(e)
         except (ValueError, PermissionError) as e:
             return jsonify({"error": str(e)}), 400
         except Exception as e:
@@ -60,9 +67,45 @@ class SwapController:
                 return jsonify({"error": "offered_shift_id required"}), 400
             swap = svc.make_offer(user_id=user_id, swap_id=swap_id, offered_shift_id=int(offered_shift_id))
             return jsonify({"message": "Offer made", "swap": svc.serialize(swap)}), 200
+        except SwapConflict as e:
+            return _conflict_response(e)
         except (ValueError, PermissionError) as e:
             return jsonify({"error": str(e)}), 400
         except Exception as e:
+            import traceback; traceback.print_exc()
+            return jsonify({"error": "Something went wrong"}), 500
+
+    def preview(self):
+        """Resulting-schedule check for a swap before it's sent (or an offer before it's made).
+        Body: {shift_id, receiving_user_id, offered_shift_id} for a targeted swap, or
+        {swap_id, offered_shift_id} for an offer on an open swap."""
+        try:
+            user_id = int(get_jwt_identity())
+            data = request.get_json(silent=True) or {}
+            offered = data.get("offered_shift_id")
+            if not offered:
+                return jsonify({"error": "offered_shift_id required"}), 400
+            if data.get("swap_id"):
+                swap = svc._get(int(data["swap_id"]))
+                if swap.swap_type != "open" or swap.requesting_user_id == user_id:
+                    return jsonify({"error": "You can only preview an offer on someone else's open swap"}), 400
+                shift_id, requester, receiver = swap.shift_id, swap.requesting_user_id, user_id
+            else:
+                shift_id, receiver = data.get("shift_id"), data.get("receiving_user_id")
+                if not shift_id or not receiver:
+                    return jsonify({"error": "shift_id and receiving_user_id required"}), 400
+                requester = user_id
+            shift_id, receiver, offered = int(shift_id), int(receiver), int(offered)
+            # Only the people in the swap, about shifts they actually hold.
+            svc._assert_assigned(shift_id, requester)
+            svc._assert_assigned(offered, receiver)
+            svc._assert_same_location_staff(shift_id, offered, requester, receiver)
+            validation = svc.evaluate(shift_id=shift_id, requesting_user_id=requester,
+                                      offered_shift_id=offered, receiving_user_id=receiver)
+            return jsonify({"validation": validation}), 200
+        except (ValueError, PermissionError) as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception:
             import traceback; traceback.print_exc()
             return jsonify({"error": "Something went wrong"}), 500
 
@@ -82,6 +125,8 @@ class SwapController:
             user_id = int(get_jwt_identity())
             swap = svc.accept(user_id=user_id, swap_id=swap_id)
             return jsonify({"message": "Swap accepted", "swap": svc.serialize(swap)}), 200
+        except SwapConflict as e:
+            return _conflict_response(e)
         except (ValueError, PermissionError) as e:
             return jsonify({"error": str(e)}), 400
         except Exception as e:
@@ -193,11 +238,19 @@ class SwapController:
         try:
             from datetime import datetime, timezone
             now = datetime.now(timezone.utc)
+            # Only colleagues at one of the caller's locations, and only shifts there.
+            user_id = int(get_jwt_identity())
+            mine = {e.location_id for e in Employment.query.filter_by(user_id=user_id, status="active").all()}
+            theirs = {e.location_id for e in Employment.query.filter_by(user_id=colleague_id, status="active").all()}
+            shared = (mine & theirs) - {None}
+            if not shared:
+                return jsonify({"shifts": []}), 200
             shifts = (
                 db.session.query(Shift)
                 .join(ShiftAssignment, ShiftAssignment.shift_id == Shift.shift_id)
                 .filter(
                     ShiftAssignment.user_id == colleague_id,
+                    Shift.location_id.in_(shared),
                     Shift.status            == "published",
                     Shift.start_time        > now,
                 )
@@ -242,12 +295,18 @@ class SwapController:
             manager_id = int(get_jwt_identity())
             data       = request.get_json(silent=True) or {}
             approve    = bool(data.get("approve", False))
-            result     = svc.manager_decide(swap_id=swap_id, manager_user_id=manager_id, approve=approve)
+            result     = svc.manager_decide(
+                swap_id=swap_id, manager_user_id=manager_id, approve=approve,
+                allow_outside_availability=bool(data.get("allow_outside_availability", False)),
+            )
             return jsonify({
-                "message":   "Decision recorded",
-                "swap":      svc.serialize(result["swap"]),
-                "conflicts": result["conflicts"],
+                "message":    "Decision recorded",
+                "swap":       svc.serialize(result["swap"]),
+                "conflicts":  result["conflicts"],
+                "validation": result["validation"],
             }), 200
+        except (SwapConflict, SwapNeedsOverride) as e:
+            return _conflict_response(e)
         except PermissionError as e:
             return jsonify({"error": str(e)}), 403
         except ValueError as e:

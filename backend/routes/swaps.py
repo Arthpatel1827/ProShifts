@@ -17,6 +17,11 @@ def request_open():
 def request_targeted():
     return ctrl.request_targeted()
 
+@router.post("/preview")
+@jwt_required()
+def preview():
+    return ctrl.preview()
+
 @router.get("/mine")
 @jwt_required()
 def my_swaps():
