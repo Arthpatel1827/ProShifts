@@ -1,282 +1,89 @@
 # services/ai_service.py
+"""
+Older AI endpoints, now on the Nemotron layer in ai/.
+
+The free-text chat and schedule generator that wrote model output straight into the
+database were replaced by ai.assistant (read-only) and ai.schedule_copilot (validated
+drafts that a manager applies).
+"""
 import json
 from datetime import timedelta
-from typing import Optional, List, Dict, Any
-import anthropic
-from flask import current_app
-from extensions import db
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from ai.client import AIBadResponse, NemotronClient
+from ai.tools import AIContext, ToolError, find_shift_replacements
+from models import Location, Shift, ShiftSwap
 from utils import timezones as tzu
-from models import AppUser, Employment, Availability, Shift, ShiftAssignment, Location
+
+_WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+class _DayPrediction(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    recommended_staff: int = Field(ge=0, le=500)
+    confidence: str = "medium"
+    reason: str = ""
+
+
+class _Prediction(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    predictions: dict[str, _DayPrediction]
+    summary: str = ""
+    warnings: list[str] = Field(default_factory=list)
 
 
 class AIService:
 
-    def _client(self):
-        return anthropic.Anthropic(api_key=current_app.config.get("ANTHROPIC_API_KEY"))
-
-    def _model(self):
-        return current_app.config.get("AI_MODEL", "claude-sonnet-4-6")
-
-    # ── Chat assistant ────────────────────────────────────────────────────────
-    def chat(self, *, user_id, location_id, message, can_write=False, conversation_history=None):
-        context = self._build_context(location_id)
-
-        if can_write:
-            system = f"""You are an AI scheduling assistant with full access to create shifts.
-When asked to create shifts, respond with a JSON block like this:
-```json
-{{
-  "action": "create_shifts",
-  "shifts": [
-    {{
-      "start_time": "2024-01-15T09:00:00",
-      "end_time": "2024-01-15T17:00:00",
-      "user_id": 123,
-      "role_id": null,
-      "break_minutes": 30,
-      "notes": ""
-    }}
-  ],
-  "message": "I've created 3 shifts for next week."
-}}
-```
-For other questions, respond normally without JSON.
-Location data: {json.dumps(context, indent=2)}
-Today: {tzu.local_today(tzu.location_tz_by_id(location_id)).strftime('%A, %B %d, %Y')} (location time)"""
-        else:
-            system = f"""You are a helpful scheduling assistant.
-You can suggest schedules but CANNOT create or modify shifts directly.
-Always end suggestions with: "Would you like me to set this up? You'll need the Advanced plan."
-Location data: {json.dumps(context, indent=2)}
-Today: {tzu.local_today(tzu.location_tz_by_id(location_id)).strftime('%A, %B %d, %Y')} (location time)"""
-
-        messages = list(conversation_history or [])
-        messages.append({"role": "user", "content": message})
-
-        response = self._client().messages.create(
-            model=self._model(), max_tokens=1500,
-            system=system, messages=messages,
-        )
-        reply_text = response.content[0].text
-
-        action_data = None
-        if can_write and "```json" in reply_text:
-            try:
-                json_str = reply_text.split("```json")[1].split("```")[0].strip()
-                action_data = json.loads(json_str)
-            except (json.JSONDecodeError, IndexError):
-                pass
-
-        return {"reply": reply_text, "action_data": action_data, "model": self._model()}
-
-    # ── Schedule generator ────────────────────────────────────────────────────
-    def generate_schedule(self, *, location_id, week_start, manager_user_id, shifts_per_day=3, hours_per_shift=8):
-        context = self._build_context(location_id)
-        prompt = f"""Generate a complete 7-day schedule for the week starting {week_start}.
-Location: {context['location_name']}
-Staff: {json.dumps(context['staff'], indent=2)}
-Availability: {json.dumps(context['availability'], indent=2)}
-Existing shifts: {json.dumps(context['existing_shifts'], indent=2)}
-
-Requirements:
-- {shifts_per_day} shifts per day, each ~{hours_per_shift} hours
-- Respect availability — do NOT schedule outside available times
-- Distribute shifts fairly
-- ISO 8601 times (e.g. 2024-01-15T09:00:00)
-
-Respond ONLY with a JSON array:
-[{{"user_id": 123, "start_time": "...", "end_time": "...", "break_minutes": 30, "notes": ""}}]"""
-
-        response = self._client().messages.create(
-            model=self._model(), max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = response.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        try:
-            return json.loads(raw.strip())
-        except json.JSONDecodeError as e:
-            raise ValueError(f"AI returned invalid JSON: {e}")
-
     # ── Staffing predictor ────────────────────────────────────────────────────
-    def predict_staffing(self, *, location_id, target_week):
+    def predict_staffing(self, *, location_id, target_week, client: NemotronClient | None = None):
         tz = tzu.location_tz_by_id(location_id)
-        eight_weeks_ago = tzu.utc_now() - timedelta(weeks=8)
         historical = Shift.query.filter(
             Shift.location_id == location_id,
             Shift.status == "published",
-            Shift.start_time >= eight_weeks_ago,
+            Shift.start_time >= tzu.utc_now() - timedelta(weeks=8),
         ).all()
 
-        day_counts = {d: [] for d in ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]}
+        day_counts = {d: [] for d in _WEEKDAYS}
         for shift in historical:
-            day = tzu.to_local(shift.start_time, tz).strftime("%A")
-            day_counts[day].append(len(shift.assignments))
-
+            day_counts[tzu.to_local(shift.start_time, tz).strftime("%A")].append(len(shift.assignments))
         history_summary = {
-            day: {
-                "avg_staff":   round(sum(c)/len(c), 1) if c else 0,
-                "max_staff":   max(c) if c else 0,
-                "data_points": len(c),
-            }
+            day: {"avg_staff": round(sum(c) / len(c), 1) if c else 0, "max_staff": max(c) if c else 0, "data_points": len(c)}
             for day, c in day_counts.items()
         }
 
-        prompt = f"""You are a staffing analyst. Predict staff needed each day for the week starting {target_week}.
-Historical data (last 8 weeks): {json.dumps(history_summary, indent=2)}
+        prompt = f"""You are a staffing analyst. Predict how many staff are needed each day for the week starting {target_week}.
+Base it only on this history of the last 8 weeks (assignments per published shift, by weekday):
+{json.dumps(history_summary)}
+If there is little or no history, say so in "warnings" and keep confidence low.
+Respond ONLY with JSON: {{"predictions": {{"Monday": {{"recommended_staff": 0, "confidence": "low|medium|high", "reason": "..."}}, ... all 7 days}}, "summary": "...", "warnings": []}}"""
 
-Respond ONLY with JSON:
-{{
-  "predictions": {{
-    "Monday":    {{"recommended_staff": 3, "confidence": "high", "reason": "..."}},
-    "Tuesday":   {{"recommended_staff": 2, "confidence": "medium", "reason": "..."}},
-    "Wednesday": {{"recommended_staff": 2, "confidence": "high", "reason": "..."}},
-    "Thursday":  {{"recommended_staff": 3, "confidence": "high", "reason": "..."}},
-    "Friday":    {{"recommended_staff": 5, "confidence": "high", "reason": "..."}},
-    "Saturday":  {{"recommended_staff": 6, "confidence": "high", "reason": "..."}},
-    "Sunday":    {{"recommended_staff": 4, "confidence": "medium", "reason": "..."}}
-  }},
-  "summary": "...",
-  "warnings": []
-}}"""
-
-        response = self._client().messages.create(
-            model=self._model(), max_tokens=1000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = response.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
+        client = client or NemotronClient()
+        result = client.chat([{"role": "user", "content": prompt}], feature="staffing_prediction", max_tokens=1000, temperature=0.3)
+        text = result.content
         try:
-            result = json.loads(raw.strip())
-        except json.JSONDecodeError:
-            result = {"raw": raw, "error": "Could not parse prediction"}
-        result["target_week"]     = target_week
-        result["location_id"]     = location_id
-        result["history_summary"] = history_summary
-        return result
+            parsed = _Prediction.model_validate(json.loads(text[text.find("{"): text.rfind("}") + 1]))
+        except (ValueError, TypeError, ValidationError):
+            raise AIBadResponse("The AI returned a forecast ProShifts couldn't read.")
+        out = parsed.model_dump()
+        out.update(target_week=target_week, location_id=location_id, history_summary=history_summary, model=client.model)
+        return out
 
     # ── Swap recommendations ──────────────────────────────────────────────────
-    def recommend_swap_matches(self, *, swap_id, location_id):
-        from models import ShiftSwap
-        swap  = ShiftSwap.query.get(swap_id)
-        shift = Shift.query.get(swap.shift_id)
-        if not shift:
-            return []
-
-        # Availability is stored as local wall-clock times, so compare in location time.
-        tz          = tzu.location_tz_by_id(shift.location_id)
-        local_start = tzu.to_local(shift.start_time, tz)
-        shift_day   = local_start.strftime("%a").lower()
-        shift_start = local_start.time()
-        shift_end   = tzu.to_local(shift.end_time, tz).time()
-
-        emps = Employment.query.filter(
-            Employment.location_id == location_id,
-            Employment.status == "active",
-            Employment.user_id != swap.requesting_user_id,
-        ).all()
-
-        eligible = []
-        for emp in emps:
-            avail = Availability.query.filter_by(
-                emp_id=emp.emp_id, day_of_week=shift_day
-            ).first()
-            if avail and avail.start_time <= shift_start and avail.end_time >= shift_end:
-                user = AppUser.query.get(emp.user_id)
-                ws, we = tzu.week_bounds(tz, local_start.date())
-                shift_count = (
-                    db.session.query(ShiftAssignment)
-                    .join(Shift)
-                    .filter(ShiftAssignment.user_id == emp.user_id,
-                            Shift.start_time >= ws, Shift.start_time < we)
-                    .count()
-                )
-                eligible.append({
-                    "user_id": emp.user_id,
-                    "name":    user.display_name or user.username,
-                    "role":    emp.role.name if emp.role else "Staff",
-                    "shifts_this_week": shift_count,
-                })
-
-        if not eligible:
-            return []
-
-        prompt = f"""Rank these employees as swap candidates.
-Shift: {local_start.strftime('%A %I:%M %p')} - {tzu.to_local(shift.end_time, tz).strftime('%I:%M %p')} (location time)
-Role needed: {shift.role.name if shift.role else 'Any'}
-Candidates: {json.dumps(eligible, indent=2)}
-
-Rank by fewest shifts this week first (fairness), then role match.
-Respond ONLY with JSON — top 3:
-[{{"user_id": 123, "name": "Alice", "reason": "..."}}]"""
-
-        response = self._client().messages.create(
-            model=self._model(), max_tokens=500,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        raw = response.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
+    def recommend_swap_matches(self, *, swap_id, location_id, caller_user_id):
+        """Deterministic: eligible coworkers for the swapped shift (availability, time off,
+        overlaps, role, hours all checked), fewest weekly hours first."""
+        swap = ShiftSwap.query.get(swap_id)
+        shift = Shift.query.get(swap.shift_id) if swap else None
+        if not shift or shift.location_id != location_id:
+            raise LookupError("Swap request not found at this location")
+        ctx = AIContext(location=Location.query.get(location_id), caller_user_id=caller_user_id)
         try:
-            return json.loads(raw.strip())
-        except json.JSONDecodeError:
-            return eligible[:3]
-
-    # ── Context builder ───────────────────────────────────────────────────────
-    def _build_context(self, location_id: int) -> dict:
-        location = Location.query.get(location_id)
-        if not location:
-            return {}
-        emps  = Employment.query.filter_by(location_id=location_id, status="active").all()
-        staff, availability_data = [], []
-        for emp in emps:
-            user = AppUser.query.get(emp.user_id)
-            if not user:
-                continue
-            staff.append({
-                "user_id": emp.user_id,
-                "name":    user.display_name or user.username,
-                "role":    emp.role.name if emp.role else "Staff",
-                "emp_id":  emp.emp_id,
-            })
-            for av in Availability.query.filter_by(emp_id=emp.emp_id).all():
-                availability_data.append({
-                    "user_id":    emp.user_id,
-                    "name":       user.display_name or user.username,
-                    "day":        av.day_of_week,
-                    "start_time": av.start_time.strftime("%H:%M"),
-                    "end_time":   av.end_time.strftime("%H:%M"),
-                })
-        tz       = tzu.location_tz(location)
-        now      = tzu.utc_now()
-        upcoming = Shift.query.filter(
-            Shift.location_id == location_id,
-            Shift.start_time >= now,
-            Shift.start_time <= now + timedelta(days=14),
-        ).all()
-        return {
-            "location_id":    location_id,
-            "location_name":  location.loc_name,
-            "timezone":       location.timezone,
-            "staff":          staff,
-            "availability":   availability_data,
-            "existing_shifts": [
-                {
-                    "shift_id":    s.shift_id,
-                    # Local wall-clock times, matching what the model is asked to return.
-                    "start_time":  tzu.to_local(s.start_time, tz).replace(tzinfo=None).isoformat(),
-                    "end_time":    tzu.to_local(s.end_time, tz).replace(tzinfo=None).isoformat(),
-                    "status":      s.status,
-                    "assigned_to": [a.user_id for a in s.assignments],
-                }
-                for s in upcoming
-            ],
-        }
+            data = find_shift_replacements(ctx, shift.shift_id)
+        except ToolError as e:
+            raise LookupError(str(e))
+        return [
+            {"user_id": c["user_id"], "name": c["name"],
+             "reason": f"Eligible; {c['week_hours_if_assigned']:g} h that week if they take it."}
+            for c in data["candidates"] if c["user_id"] != swap.requesting_user_id
+        ][:3]

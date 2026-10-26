@@ -39,6 +39,35 @@ stored as absolute instants; a naive time sent by a client means wall-clock time
 shift's location. All of this lives in `utils/timezones.py`; never compute day boundaries
 with UTC midnight or compare naive datetimes against `timestamptz` columns.
 
+### AI (NVIDIA Nemotron)
+
+AI features call NVIDIA's OpenAI-compatible API from the backend only; the key never
+reaches the web or mobile apps. Set in `backend/.env`:
+
+| Variable | Default | |
+|---|---|---|
+| `NVIDIA_API_KEY` | — | From [build.nvidia.com](https://build.nvidia.com). Without it AI endpoints return `503 AI_NOT_CONFIGURED` and everything else works. |
+| `NVIDIA_NEMOTRON_MODEL` | `nvidia/nemotron-3-super-120b-a12b` | Any Nemotron model with tool calling. |
+| `NVIDIA_BASE_URL` | `https://integrate.api.nvidia.com/v1` | Point at a self-hosted NIM if needed. |
+| `NVIDIA_TIMEOUT_SECONDS` | `60` | |
+| `NVIDIA_NEMOTRON_REASONING` | `false` | Turn on Nemotron's thinking mode (slower). |
+| `OVERTIME_WEEKLY_HOURS` | `40` | Weekly overtime threshold for your jurisdiction. |
+
+The model is never the source of truth (`ai/`):
+
+- **Assistant** (`POST /ai/assistant`) answers by calling read-only tools (`ai/tools.py`) that
+  query the caller's location. IDs the model sends back are re-checked against that location.
+- **Schedule Copilot** (`POST /ai/schedule/generate`) gets structured recommendations,
+  validates each one in `ai/validators.py` (availability, approved time off, overlaps, role,
+  weekly max hours, overtime, shift length, company/location) and computes coverage and cost
+  itself. Nothing is saved. `POST /ai/schedule/apply` re-validates and creates **draft** shifts
+  through `ShiftService`; publishing stays the normal publish flow.
+- **Insights** (`GET /ai/insights`) are computed facts; `&ai=1` adds Nemotron's suggestions,
+  kept separate from the facts.
+
+Every AI endpoint requires a manager role at the requested location. Logs (`proshifts.ai`)
+record feature, model, latency and outcome — never keys, prompts or employee data.
+
 ### Migrations
 
 Alembic owns the schema. `db.create_all()` still runs when the app starts (it only creates
@@ -62,5 +91,7 @@ python -m pytest
 ```
 
 Tests cover auth (login, unverified email, refresh/logout revocation, password reset),
-scheduling (overnight shifts, overlap and time-off conflicts, publish, labor cost) and
-cross-tenant authorization for every manager endpoint the web app uses.
+scheduling (overnight shifts, overlap and time-off conflicts, publish, labor cost),
+cross-tenant authorization for every manager endpoint the web app uses, location timezones,
+and the AI layer (`tests/test_ai.py`: only the HTTP call to NVIDIA is stubbed; data, tools,
+validation and endpoints are real).
