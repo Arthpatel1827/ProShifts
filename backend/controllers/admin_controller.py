@@ -303,4 +303,13 @@ class AdminController:
             "notes":             getattr(emp, "notes",             None),
             "hire_date":         emp.start_date.isoformat() if emp.start_date else None,
             "location_id":       emp.location_id,
+            # Joined through an emailed invite, so "Resend invite" applies.
+            "invited":           _was_invited(user.user_email, emp.location_id),
         }
+
+
+def _was_invited(email, location_id) -> bool:
+    from models import OnboardingInvite
+    if not email or not location_id:
+        return False
+    return OnboardingInvite.query.filter_by(email=email, location_id=location_id).first() is not None

@@ -62,16 +62,18 @@ def send_onboarding_email(
     temp_password: str,
     company_name: str,
     location_name: str,
-) -> None:
+) -> bool:
     """
     Sends onboarding email to newly invited staff with a temporary password.
+    Returns True only if the mail server accepted it, so callers never report
+    "email sent" when it wasn't.
     """
     if not current_app.config.get("EMAIL_SENDING_ENABLED"):
         current_app.logger.info(
             f"[DEV] Onboarding email for {to_email}: "
             f"company={company_name}, location={location_name}, temp_password={temp_password}"
         )
-        return
+        return False
 
     msg = Message(
         subject=f"Your staff account for {company_name}",
@@ -91,5 +93,7 @@ def send_onboarding_email(
     )
     try:
         mail.send(msg)
+        return True
     except Exception:
         current_app.logger.exception("Onboarding email send failed")
+        return False

@@ -53,6 +53,9 @@ class Config:
     MAIL_PASSWORD = os.getenv("MAIL_PASSWORD")
     MAIL_DEFAULT_SENDER = os.getenv("MAIL_DEFAULT_SENDER")
     EMAIL_SENDING_ENABLED = os.getenv("EMAIL_SENDING_ENABLED", "false").lower() == "true"
+    # Flask-Mail defaults MAIL_DEBUG to app.debug, which prints the whole SMTP session —
+    # including the base64 AUTH line, i.e. the mail password — to the console.
+    MAIL_DEBUG = False
 
     EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 

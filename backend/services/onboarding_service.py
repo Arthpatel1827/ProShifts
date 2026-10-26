@@ -10,7 +10,24 @@ from utils.mailer import send_onboarding_email
 
 class OnboardingService:
 
-    def create_invite(self, *, company, location, email, position) -> Tuple[OnboardingInvite, AppUser]:
+    @staticmethod
+    def _send_credentials(*, email, temp_password, company, location) -> bool:
+        """Email the login details. True only if the mail server accepted the message."""
+        try:
+            return bool(send_onboarding_email(
+                to_email=email,
+                temp_password=temp_password,
+                company_name=company.comp_name,
+                location_name=location.loc_name,
+            ))
+        except Exception:
+            from flask import current_app
+            current_app.logger.exception("Failed to send onboarding email")
+            return False
+
+    def create_invite(self, *, company, location, email, position) -> Tuple[OnboardingInvite, AppUser, bool, str]:
+        """Returns (invite, user, email_sent, temp_password). The caller decides whether the
+        temporary password may be shown to the manager (only when the email didn't go out)."""
         normalized_email = (email or "").strip().lower()
         if not normalized_email:
             raise ValueError("Email is required")
@@ -75,18 +92,22 @@ class OnboardingService:
         db.session.add(invite)
         db.session.commit()
 
-        try:
-            send_onboarding_email(
-                to_email=normalized_email,
-                temp_password=temp_password,
-                company_name=company.comp_name,
-                location_name=location.loc_name,
-            )
-        except Exception:
-            from flask import current_app
-            current_app.logger.exception("Failed to send onboarding email")
+        email_sent = self._send_credentials(
+            email=normalized_email, temp_password=temp_password, company=company, location=location
+        )
+        return invite, user, email_sent, temp_password
 
-        return invite, user
+    def resend_invite(self, *, company, location, user) -> Tuple[bool, str]:
+        """Issue a fresh temporary password for an invited employee and email it again.
+        Returns (email_sent, temp_password). The caller has already checked permissions."""
+        temp_password = secrets.token_urlsafe(8)
+        user.user_password = hash_password(temp_password)
+        user.is_verified = True
+        db.session.commit()
+        email_sent = self._send_credentials(
+            email=user.user_email, temp_password=temp_password, company=company, location=location
+        )
+        return email_sent, temp_password
 
     def accept_invite(self, *args, **kwargs):
         raise ValueError("Token-based invite flow is no longer supported.")

@@ -2,13 +2,15 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Mail, MessageSquare, Phone, ShieldAlert } from "lucide-react";
+import { KeyRound, Mail, MessageSquare, Phone, ShieldAlert } from "lucide-react";
 import { Dialog, ConfirmDialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Field, FormError, Input, Select, Textarea } from "@/components/ui/form";
 import { Avatar, Badge, ErrorState, Skeleton } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
-import { getEmployeeProfile, updateEmployeeProfile } from "@/lib/api/team";
+import { getEmployeeProfile, resendInvite, updateEmployeeProfile } from "@/lib/api/team";
+import { useManager } from "@/components/manager/manager-context";
+import { LoginDetails } from "./login-details";
 import { openDirectMessage } from "@/lib/api/messaging";
 import { useQuery } from "@/lib/hooks/use-query";
 import { formatDate, titleCase } from "@/lib/format";
@@ -51,6 +53,11 @@ export function EmployeeDialog({ userId, onClose, onSaved }: Props) {
     const [formError, setFormError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
     const [confirmDeactivate, setConfirmDeactivate] = useState(false);
+    const [confirmResend, setConfirmResend] = useState(false);
+    const [resending, setResending] = useState(false);
+    // Login details to hand over in person, when the resent email didn't go out.
+    const [unsent, setUnsent] = useState<{ email: string; password: string } | null>(null);
+    const { user } = useManager();
 
     // Re-seed the form whenever a (re)loaded or saved profile arrives.
     const [seeded, setSeeded] = useState(profile.data);
@@ -59,10 +66,42 @@ export function EmployeeDialog({ userId, onClose, onSaved }: Props) {
         setDraft(profile.data ? toDraft(profile.data) : null);
         setErrors({});
         setFormError(null);
+        setUnsent(null);
     }
 
     const p = profile.data;
     const name = p ? p.display_name || p.username : "";
+    // Mirrors the backend rule: resending resets the password, so it never reaches an owner,
+    // yourself, or (for managers) another manager or supervisor.
+    const callerRole = user?.role?.toLowerCase() ?? "";
+    const targetRole = p?.role?.toLowerCase() ?? "";
+    const canResend =
+        !!p &&
+        p.invited &&
+        p.status === "active" &&
+        p.user_id !== user?.user_id &&
+        targetRole !== "owner" &&
+        (callerRole === "owner" || (callerRole === "manager" && targetRole !== "manager" && targetRole !== "supervisor"));
+
+    async function handleResend() {
+        if (!p || !p.location_id) return;
+        setResending(true);
+        try {
+            const res = await resendInvite(p.user_id, p.location_id);
+            setConfirmResend(false);
+            if (res.email_sent || !res.temp_password) {
+                toast.success("Invite resent", `${p.user_email} will get an email with new login details.`);
+            } else {
+                setUnsent({ email: p.user_email, password: res.temp_password });
+            }
+        } catch (err) {
+            setConfirmResend(false);
+            toast.error("Couldn't resend the invite", err instanceof Error ? err.message : undefined);
+        } finally {
+            setResending(false);
+        }
+    }
+
     const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft((d) => (d ? { ...d, [k]: v } : d));
 
     function validate(d: Draft): boolean {
@@ -195,10 +234,19 @@ export function EmployeeDialog({ userId, onClose, onSaved }: Props) {
                                     )}
                                 </div>
                             </div>
-                            <Button variant="outline" onClick={handleMessage}>
-                                <MessageSquare /> Message
-                            </Button>
+                            <div className="flex flex-wrap gap-2">
+                                {canResend && (
+                                    <Button variant="outline" onClick={() => setConfirmResend(true)} disabled={resending}>
+                                        <KeyRound /> Resend invite
+                                    </Button>
+                                )}
+                                <Button variant="outline" onClick={handleMessage}>
+                                    <MessageSquare /> Message
+                                </Button>
+                            </div>
                         </div>
+
+                        {unsent && <LoginDetails email={unsent.email} password={unsent.password} />}
 
                         <form id="employee-form" onSubmit={handleSubmit} className="space-y-5" noValidate>
                             <FormError message={formError} />
@@ -280,6 +328,16 @@ export function EmployeeDialog({ userId, onClose, onSaved }: Props) {
                     </div>
                 )}
             </Dialog>
+
+            <ConfirmDialog
+                open={confirmResend}
+                onOpenChange={setConfirmResend}
+                title={`Resend invite to ${name}?`}
+                description={`${p?.user_email ?? "They"} will get a new temporary password for the mobile app. Their current password will stop working.`}
+                confirmLabel="Resend invite"
+                pending={resending}
+                onConfirm={handleResend}
+            />
 
             <ConfirmDialog
                 open={confirmDeactivate}

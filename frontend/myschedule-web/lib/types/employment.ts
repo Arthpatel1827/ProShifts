@@ -34,7 +34,13 @@ export type EmployeeProfile = {
     notes: string | null;
     hire_date: string | null;
     location_id: number | null;
+    /** Joined through an emailed invite, so "Resend invite" applies. */
+    invited: boolean;
 };
+
+/** How an invite's login details reached the employee. temp_password is present only
+ *  when the email did NOT go out, so the manager can pass it on in person. */
+export type InviteDelivery = { email_sent: boolean; temp_password?: string };
 
 export type EmployeeProfileUpdate = Partial<
     Pick<

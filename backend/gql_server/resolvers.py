@@ -375,7 +375,7 @@ def resolve_send_onboarding_invite(
     from services.onboarding_service import OnboardingService
     svc = OnboardingService()
     try:
-        invite, invited_user = svc.create_invite(
+        invite, invited_user, _sent, _temp = svc.create_invite(
             company=emp.company,
             location=emp.location,
             email=email,
