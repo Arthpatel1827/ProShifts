@@ -1,6 +1,6 @@
 # tests/test_time_corrections.py
 """Manager corrections to worked time: permission-checked, audited, never silent."""
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from extensions import db
 from models import BreakEntry, Company, Role, Employment, TimeEntry, TimeEntryAudit
@@ -126,3 +126,22 @@ def test_list_for_location(app, client, world):
     assert [e["employee_name"] for e in entries] == ["Sam Staff"]  # no other company's people
     assert client.get(f"/time-entries/manage?location_id={world.loc_b}&week_start={PAST_MON.date().isoformat()}",
                       headers=world.headers(world.manager_a)).status_code == 403
+
+
+def test_audit_has_original_new_who_when_why_and_schedule_untouched(app, client, world):
+    from models import Shift
+    sid = world.shift(world.loc_a, PAST_MON + timedelta(hours=9), hours=8, assign=[world.staff_a], status="published")
+    eid = entry(app, world.staff_a, PAST_MON + timedelta(hours=9, minutes=12), sid=sid)
+    before = datetime.utcnow()
+    res = patch(client, world, eid, clock_in=naive(PAST_MON + timedelta(hours=9)), reason="Badge reader was down")
+    assert res.status_code == 200
+    (h,) = client.get(f"/time-entries/{eid}/audit", headers=world.headers(world.manager_a)).get_json()["history"]
+    assert h["action"] == "clock_in"
+    assert h["old_value"].startswith((PAST_MON + timedelta(hours=9, minutes=12)).isoformat()[:16])   # original
+    assert h["new_value"].startswith((PAST_MON + timedelta(hours=9)).isoformat()[:16])               # new
+    assert h["changed_by_name"] == "Max Manager"                                                     # who
+    assert datetime.fromisoformat(h["changed_at"]) >= before - timedelta(seconds=1)                 # when
+    assert h["reason"] == "Badge reader was down"                                                    # why
+    with app.app_context():  # the scheduled shift is a different record and didn't move
+        s = Shift.query.get(sid)
+        assert s.start_time == PAST_MON + timedelta(hours=9) and s.end_time == PAST_MON + timedelta(hours=17)

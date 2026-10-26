@@ -185,3 +185,56 @@ def test_cannot_swap_with_another_company(client, world):
     b_shift = world.shift(world.loc_b, WED + timedelta(hours=9), assign=[world.owner_b], status="published")
     res = targeted(client, world, sam_tue, b_shift, to=world.owner_b)
     assert res.status_code == 400
+
+
+# ── The exact production bug, with the same people ──────────────────────────
+def _abc_priya(app, world):
+    with app.app_context():
+        abc = world._user("abc@a.test", "ABC", world.comp_a, world.loc_a, world.role_barista)
+        priya = world._user("priya@a.test", "Priya", world.comp_a, world.loc_a, world.role_barista)
+        db.session.commit()
+    return abc, priya
+
+
+def test_abc_priya_invalid_swap_cannot_be_submitted(app, client, world):
+    abc, priya = _abc_priya(app, world)
+    abc_tue = world.shift(world.loc_a, TUE + timedelta(hours=9), hours=8, assign=[abc], status="published")
+    priya_tue = world.shift(world.loc_a, TUE + timedelta(hours=13), hours=8, assign=[priya], status="published")
+    priya_wed = world.shift(world.loc_a, WED + timedelta(hours=10), hours=8, assign=[priya], status="published")
+    # What the app shows before sending:
+    prev = client.post("/swaps/preview", headers=world.headers(abc), json={
+        "shift_id": abc_tue, "receiving_user_id": priya, "offered_shift_id": priya_wed}).get_json()["validation"]
+    assert prev["ok"] is False
+    assert any("Priya already has a shift that overlaps this time" in e and "Tue" in e for e in prev["errors"])
+    assert prev["receiver"]["errors"][0]["shift_id"] == priya_tue
+    # Sending is refused, and nothing is saved.
+    res = client.post("/swaps/targeted", headers=world.headers(abc), json={
+        "shift_id": abc_tue, "receiving_user_id": priya, "offered_shift_id": priya_wed})
+    assert res.status_code == 409 and res.get_json()["code"] == "SWAP_CONFLICT"
+    with app.app_context():
+        assert ShiftSwap.query.count() == 0
+    assert users_on(app, abc_tue) == [abc] and users_on(app, priya_wed) == [priya]
+
+
+def test_abc_priya_schedule_changes_after_request_manager_cannot_approve(app, client, world):
+    abc, priya = _abc_priya(app, world)
+    abc_tue = world.shift(world.loc_a, TUE + timedelta(hours=9), hours=8, assign=[abc], status="published")
+    priya_wed = world.shift(world.loc_a, WED + timedelta(hours=10), hours=8, assign=[priya], status="published")
+    sid = client.post("/swaps/targeted", headers=world.headers(abc), json={
+        "shift_id": abc_tue, "receiving_user_id": priya, "offered_shift_id": priya_wed}).get_json()["swap"]["swap_id"]
+    assert client.post(f"/swaps/{sid}/accept", headers=world.headers(priya)).status_code == 200
+    # Later the manager gives Priya another Tuesday shift that overlaps ABC's.
+    new_tue = world.shift(world.loc_a, TUE + timedelta(hours=13), hours=8, status="published")
+    assert client.post(f"/shifts/{new_tue}/assign", headers=world.headers(world.manager_a), json={"user_id": priya}).status_code == 200
+    # The manager's list shows the conflict and the swap can't be approved.
+    pending = client.get(f"/swaps/pending-manager?location_id={world.loc_a}", headers=world.headers(world.manager_a)).get_json()["swaps"]
+    v = pending[0]["validation"]
+    assert v["ok"] is False and any("Priya already has a shift that overlaps" in e for e in v["errors"])
+    res = client.post(f"/swaps/{sid}/decide", headers=world.headers(world.manager_a), json={"approve": True})
+    assert res.status_code == 409 and res.get_json()["code"] == "SWAP_CONFLICT"
+    # Even "approve anyway" for availability can't push a hard conflict through.
+    res = client.post(f"/swaps/{sid}/decide", headers=world.headers(world.manager_a), json={"approve": True, "allow_outside_availability": True})
+    assert res.status_code == 409
+    assert users_on(app, abc_tue) == [abc] and users_on(app, priya_wed) == [priya]
+    with app.app_context():
+        assert ShiftSwap.query.get(sid).status == "accepted" and ShiftSwap.query.get(sid).manager_approved is None
