@@ -94,6 +94,8 @@ export default function ShiftRing({
         inputRange: [0, 1],
         outputRange: [circumference, 0],
     });
+    // At 0% a round-capped arc still paints its two caps as a dot; hide the arc until it has length.
+    const arcOpacity = progressAnim.interpolate({ inputRange: [0, 0.005, 1], outputRange: [0, 1, 1] });
     const glowOpacity = pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 0.14] });
     const glowScale = pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.95, 1.05] });
 
@@ -104,7 +106,9 @@ export default function ShiftRing({
     };
 
     return (
-        <View style={styles.wrap}>
+        // With a button, take the container's width so the button can span it; a percentage
+        // width inside a shrink-to-fit parent overflowed and clipped the label on Android.
+        <View style={[styles.wrap, actionLabel ? styles.wrapWithAction : null]}>
             <View style={{ width: size, height: size }}>
                 {pulsing && (
                     <Animated.View
@@ -138,6 +142,7 @@ export default function ShiftRing({
                         fill="none"
                         strokeDasharray={circumference}
                         strokeDashoffset={strokeDashoffset}
+                        strokeOpacity={arcOpacity}
                     />
                 </Svg>
                 <View style={styles.center}>
@@ -168,7 +173,7 @@ export default function ShiftRing({
                     ]}
                 >
                     {actionIcon && <Ionicons name={actionIcon} size={18} color="#fff" />}
-                    <Text style={styles.actionText}>{actionLabel}</Text>
+                    <Text style={styles.actionText} numberOfLines={1}>{actionLabel}</Text>
                 </Pressable>
             )}
         </View>
@@ -177,6 +182,7 @@ export default function ShiftRing({
 
 const styles = StyleSheet.create({
     wrap: { alignItems: 'center' },
+    wrapWithAction: { alignSelf: 'stretch' },
     glow: {
         position: 'absolute',
         top: 6, left: 6, right: 6, bottom: 6,
@@ -197,8 +203,9 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         gap: 8,
         paddingVertical: 14,
+        paddingHorizontal: 20,
         borderRadius: 999,
-        width: '100%',
+        alignSelf: 'stretch',
         marginTop: 20,
     },
     actionText: { color: '#fff', fontSize: 15, fontWeight: '700' },
