@@ -92,6 +92,14 @@ class OnboardingService:
         db.session.add(invite)
         db.session.commit()
 
+        # A new (or returning) employee joins the location's #general automatically.
+        try:
+            from services.messaging_service import MessagingService
+            MessagingService().on_employment_changed(user.user_id, location.loc_id)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Couldn't add the new employee to #general")
+
         email_sent = self._send_credentials(
             email=normalized_email, temp_password=temp_password, company=company, location=location
         )

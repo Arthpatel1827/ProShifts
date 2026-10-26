@@ -30,6 +30,8 @@ export type Channel = {
     unread: number;
     member_count: number;
     last_message: Message | null;
+    /** "manager" (owner/manager here) or "admin" (group admin) when you can manage members. */
+    can_manage?: "manager" | "admin" | null;
 };
 
 export type ChannelMember = {
@@ -38,4 +40,5 @@ export type ChannelMember = {
     initials: string;
     is_admin: boolean;
     joined_at: string;
+    role?: string | null;
 };

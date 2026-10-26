@@ -7,11 +7,27 @@ from models import Employment, Message
 svc = MessagingService()
 
 
+def _emit_to_members(channel_id, event, payload):
+    """Deliver to each CURRENT member's own room. A channel room could still hold the
+    socket of someone just removed; personal rooms can't leak to them."""
+    try:
+        from extensions import socketio
+        from models import ChannelMember
+        for m in ChannelMember.query.filter_by(channel_id=channel_id).all():
+            socketio.emit(event, payload, room=f"user:{m.user_id}")
+    except Exception:
+        pass
+
+
 class MessagingController:
 
     def get_my_channels(self):
         try:
             user_id = int(get_jwt_identity())
+            # Self-heal: everyone active at a location is in its #general.
+            for emp in Employment.query.filter_by(user_id=user_id, status="active").all():
+                if emp.location_id:
+                    svc.sync_general(emp.location_id)
             data    = svc.get_channels_for_user(user_id)
             return jsonify({
                 "channels": [
@@ -83,6 +99,10 @@ class MessagingController:
                 location_id = emp.location_id if emp else None
             if not location_id:
                 return jsonify({"error": "location_id required"}), 400
+            # Only for a location the caller manages.
+            mgr = Employment.query.filter_by(user_id=user_id, location_id=int(location_id), status="active").first()
+            if not mgr or (mgr.role.name if mgr.role else "").lower() not in ("owner", "manager", "supervisor"):
+                return jsonify({"error": "Manager access required"}), 403
             svc.setup_location_channels(int(location_id), user_id)
             return jsonify({"message": "Channels initialized"}), 200
         except Exception:
@@ -134,11 +154,7 @@ class MessagingController:
             )
             serialized = svc.serialize_message(msg, user_id)
 
-            try:
-                from extensions import socketio
-                socketio.emit('message:new', serialized, room=f'channel_{channel_id}')
-            except Exception:
-                pass
+            _emit_to_members(channel_id, 'message:new', serialized)
 
             return jsonify({"message": serialized}), 201
         except PermissionError as e:
@@ -173,11 +189,7 @@ class MessagingController:
             user_id    = int(get_jwt_identity())
             msg        = svc.toggle_pin(message_id, user_id)
             serialized = svc.serialize_message(msg, user_id)
-            try:
-                from extensions import socketio
-                socketio.emit('message:pinned', serialized, room=f'channel_{msg.channel_id}')
-            except Exception:
-                pass
+            _emit_to_members(msg.channel_id, 'message:pinned', serialized)
             return jsonify({"message": serialized, "is_pinned": msg.is_pinned}), 200
         except PermissionError as e:
             return jsonify({"error": str(e)}), 403
@@ -194,18 +206,14 @@ class MessagingController:
                 return jsonify({"error": "emoji required"}), 400
             added = svc.toggle_reaction(message_id, user_id, emoji)
             msg   = Message.query.get(message_id)
-            try:
-                from extensions import socketio
-                if msg:
-                    socketio.emit('message:reaction', {
-                        "message_id": message_id,
-                        "channel_id": msg.channel_id,
-                        "emoji":      emoji,
-                        "user_id":    user_id,
-                        "added":      added,
-                    }, room=f'channel_{msg.channel_id}')
-            except Exception:
-                pass
+            if msg:
+                _emit_to_members(msg.channel_id, 'message:reaction', {
+                    "message_id": message_id,
+                    "channel_id": msg.channel_id,
+                    "emoji":      emoji,
+                    "user_id":    user_id,
+                    "added":      added,
+                })
             return jsonify({"added": added, "emoji": emoji}), 200
         except PermissionError as e:
             return jsonify({"error": str(e)}), 403
@@ -215,7 +223,7 @@ class MessagingController:
             import traceback; traceback.print_exc()
             return jsonify({"error": "Something went wrong"}), 500
 
-    def get_members(self, channel_id: int):
+    def get_members(self, channel_id: int):  # noqa: C901
         try:
             user_id = int(get_jwt_identity())
             members = svc.get_members(channel_id, user_id)
@@ -227,6 +235,7 @@ class MessagingController:
                         "initials":  svc._initials(m.user) if m.user else "?",
                         "is_admin":  m.is_admin,
                         "joined_at": m.joined_at.isoformat(),
+                        "role":      _role_name(m.user_id, channel_id),
                     }
                     for m in members if m.user
                 ]
@@ -246,8 +255,48 @@ class MessagingController:
                 return jsonify({"error": "user_id required"}), 400
             svc.add_member(channel_id, int(new_user_id), user_id)
             return jsonify({"message": "Member added"}), 200
-        except (ValueError, PermissionError) as e:
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
+        except ValueError as e:
             return jsonify({"error": str(e)}), 400
         except Exception:
             import traceback; traceback.print_exc()
             return jsonify({"error": "Something went wrong"}), 500
+
+    def remove_member(self, channel_id: int, member_id: int):
+        try:
+            svc.remove_member(channel_id, member_id, int(get_jwt_identity()))
+            return jsonify({"message": "Member removed"}), 200
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+    def set_admin(self, channel_id: int, member_id: int):
+        try:
+            data = request.get_json(silent=True) or {}
+            if "is_admin" not in data:
+                return jsonify({"error": "is_admin required"}), 400
+            m = svc.set_admin(channel_id, member_id, bool(data["is_admin"]), int(get_jwt_identity()))
+            return jsonify({"message": "Updated", "is_admin": m.is_admin}), 200
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+    def location_groups(self, location_id: int):
+        try:
+            user_id = int(get_jwt_identity())
+            groups = svc.location_groups(location_id, user_id)
+            return jsonify({"channels": [svc.serialize_channel(c, user_id) for c in groups]}), 200
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
+        except Exception:
+            import traceback; traceback.print_exc()
+            return jsonify({"error": "Something went wrong"}), 500
+
+def _role_name(user_id, channel_id):
+    from models import Channel
+    ch = Channel.query.get(channel_id)
+    emp = Employment.query.filter_by(user_id=user_id, location_id=ch.location_id).first() if ch and ch.location_id else None
+    return emp.role.name if emp and emp.role else None

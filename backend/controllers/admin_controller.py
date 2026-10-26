@@ -214,10 +214,17 @@ class AdminController:
         if "notes" in data:
             emp.notes = (data["notes"] or "").strip() or None
 
+        status_changed = False
         if "status" in data and data["status"] in ("active", "inactive"):
+            status_changed = emp.status != data["status"]
             emp.status = data["status"]
 
         db.session.commit()
+        if status_changed:
+            # Active → in #general; inactive → out of the location's channels.
+            from services.messaging_service import MessagingService
+            for e in Employment.query.filter_by(user_id=user_id, comp_id=mgr_emp.comp_id).all():
+                MessagingService().on_employment_changed(user_id, e.location_id)
 
         return jsonify({
             "message": "Profile updated",

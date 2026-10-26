@@ -6,13 +6,14 @@ import { useManager } from "@/components/manager/manager-context";
 import { Button } from "@/components/ui/button";
 import { Avatar, ErrorState, Skeleton } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
-import { listMembers, listMessages, listPinned, markRead, sendMessage, togglePin, toggleReaction } from "@/lib/api/messaging";
+import { listMessages, listPinned, markRead, sendMessage, togglePin, toggleReaction } from "@/lib/api/messaging";
 import { useQuery } from "@/lib/hooks/use-query";
 import { emitTyping, useSocketEvent } from "@/lib/hooks/use-socket";
 import { formatDate, formatTime, fromServerUtc, isSameDay } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Channel, Message } from "@/lib/types";
 import { ChannelIcon } from "./channel-icon";
+import { MembersPanel } from "./members-panel";
 
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉", "👀", "✅"];
 const TYPING_IDLE_MS = 2500;
@@ -31,7 +32,7 @@ function renderContent(text: string) {
     );
 }
 
-export function Conversation({ channel }: { channel: Channel }) {
+export function Conversation({ channel, onChannelsChanged }: { channel: Channel; onChannelsChanged?: () => void }) {
     const { user } = useManager();
     const toast = useToast();
     const me = user?.user_id;
@@ -52,7 +53,6 @@ export function Conversation({ channel }: { channel: Channel }) {
     const typingTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
     const pinned = useQuery(panel === "pinned" ? ["pinned", channel.channel_id] : null, () => listPinned(channel.channel_id));
-    const members = useQuery(panel === "members" ? ["members", channel.channel_id] : null, () => listMembers(channel.channel_id));
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -347,20 +347,8 @@ export function Conversation({ channel }: { channel: Channel }) {
                                     ))}
                                 </ul>
                             )
-                        ) : members.loading ? (
-                            <Skeleton className="h-20" />
-                        ) : members.error ? (
-                            <ErrorState message={members.error.message} />
                         ) : (
-                            <ul className="space-y-2">
-                                {members.data?.map((m) => (
-                                    <li key={m.user_id} className="flex items-center gap-2 text-sm">
-                                        <Avatar name={m.name} initials={m.initials} className="size-7" />
-                                        <span className="flex-1 truncate">{m.name}</span>
-                                        {m.is_admin && <span className="text-[10px] font-semibold uppercase text-primary">Admin</span>}
-                                    </li>
-                                ))}
-                            </ul>
+                            <MembersPanel channel={channel} onChanged={onChannelsChanged} />
                         )}
                     </div>
                 </aside>

@@ -6,6 +6,22 @@ from extensions import socketio
 from models import AppUser, ChannelMember, Employment
 
 
+# This process's open sockets per user, so removing someone from a channel can take
+# their sockets out of its room straight away.
+_SIDS: dict[int, set] = {}
+
+
+def leave_channel_rooms(user_id: int, channel_id: int | None = None):
+    for sid in list(_SIDS.get(user_id, ())):
+        try:
+            rooms = [f"channel_{channel_id}"] if channel_id else [
+                r for r in (socketio.server.rooms(sid, namespace="/") or []) if str(r).startswith("channel_")]
+            for room in rooms:
+                socketio.server.leave_room(sid, room, namespace="/")
+        except Exception:
+            pass
+
+
 def _socket_user_id():
     # Flask-SocketIO keeps `session` per connection; set once the handshake is verified.
     return session.get("socket_user_id")
@@ -26,6 +42,8 @@ def register_socket_handlers():
         except Exception:
             return False
         session["socket_user_id"] = user_id
+        from flask import request as _req
+        _SIDS.setdefault(user_id, set()).add(_req.sid)
         join_room(f"user:{user_id}")
         emit("connected", {"message": "Connected to real-time updates", "user_id": user_id})
         return True
@@ -58,8 +76,11 @@ def register_socket_handlers():
             leave_room(f"company:{data['company_id']}")
 
     @socketio.on("disconnect")
-    def handle_disconnect():
-        pass
+    def handle_disconnect(*_args):
+        from flask import request as _req
+        uid = _socket_user_id()
+        if uid in _SIDS:
+            _SIDS[uid].discard(_req.sid)
 
     @socketio.on("ping_server")
     def handle_ping():

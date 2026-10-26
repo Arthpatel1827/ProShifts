@@ -16,10 +16,14 @@ class MessagingService:
 
     # ── Channel setup ─────────────────────────────────────────────────────────
 
+    MANAGEABLE = ('group', 'broadcast', 'role')
+
     def setup_location_channels(self, location_id: int, created_by: int = None):
-        """Create #general + one channel per role for a location."""
+        """Create #general (every active employee) + one channel per role. Role channels
+        are private groups: managers are added as admins and choose the members."""
         existing = Channel.query.filter_by(location_id=location_id, channel_type='general').first()
         if existing:
+            self.sync_general(location_id)
             return existing
 
         general = Channel(
@@ -32,20 +36,12 @@ class MessagingService:
         db.session.add(general)
         db.session.flush()
 
-        emps = Employment.query.filter_by(location_id=location_id, status='active').all()
-        for emp in emps:
-            is_admin = emp.role and emp.role.name.lower() in ('owner', 'manager')
-            db.session.add(ChannelMember(
-                channel_id=general.channel_id,
-                user_id=emp.user_id,
-                is_admin=is_admin,
-            ))
-
         roles = Role.query.filter_by(location_id=location_id).all()
         for role in roles:
             self._create_role_channel(location_id, role, created_by)
 
         db.session.commit()
+        self.sync_general(location_id)
         return general
 
     def _create_role_channel(self, location_id: int, role: Role, created_by: int = None):
@@ -59,33 +55,66 @@ class MessagingService:
             location_id=location_id,
             created_by=created_by,
             role_id=role.role_id,
-            description=f'Channel for all {role.name}s',
+            description=f'Channel for {role.name}s — managers choose who is in it',
         )
         db.session.add(channel)
         db.session.flush()
 
-        emps = Employment.query.filter_by(
-            location_id=location_id, role_id=role.role_id, status='active'
-        ).all()
-        for emp in emps:
-            db.session.add(ChannelMember(channel_id=channel.channel_id, user_id=emp.user_id))
+        # Private: only the location's managers to start with, as admins.
+        for emp in Employment.query.filter_by(location_id=location_id, status='active').all():
+            if emp.role and emp.role.name.lower() in ('owner', 'manager'):
+                db.session.add(ChannelMember(channel_id=channel.channel_id, user_id=emp.user_id, is_admin=True))
 
         return channel
 
-    def add_user_to_location_channels(self, user_id: int, location_id: int, role_id: int = None):
-        """Add a new employee to general + their role channel."""
+    # ── General: every active employee, automatically ─────────────────────────
+
+    def sync_general(self, location_id: int) -> int:
+        """Make #general at this location contain exactly its active employees (managers
+        as admins). Returns how many people were added."""
         general = Channel.query.filter_by(location_id=location_id, channel_type='general').first()
-        if general:
-            if not ChannelMember.query.filter_by(channel_id=general.channel_id, user_id=user_id).first():
-                db.session.add(ChannelMember(channel_id=general.channel_id, user_id=user_id))
-
-        if role_id:
-            role_ch = Channel.query.filter_by(location_id=location_id, role_id=role_id, channel_type='role').first()
-            if role_ch:
-                if not ChannelMember.query.filter_by(channel_id=role_ch.channel_id, user_id=user_id).first():
-                    db.session.add(ChannelMember(channel_id=role_ch.channel_id, user_id=user_id))
-
+        if not general:
+            return 0
+        active = {
+            e.user_id: e for e in Employment.query.filter_by(location_id=location_id, status='active').all()
+        }
+        members = {m.user_id: m for m in ChannelMember.query.filter_by(channel_id=general.channel_id).all()}
+        added = 0
+        for uid, emp in active.items():
+            if uid not in members:
+                is_admin = bool(emp.role and emp.role.name.lower() in ('owner', 'manager'))
+                db.session.add(ChannelMember(channel_id=general.channel_id, user_id=uid, is_admin=is_admin))
+                added += 1
+        for uid, m in members.items():
+            if uid not in active:
+                db.session.delete(m)
         db.session.commit()
+        return added
+
+    def on_employment_changed(self, user_id: int, location_id: int):
+        """Call after an employment is created, activated or deactivated."""
+        if not location_id:
+            return
+        emp = Employment.query.filter_by(user_id=user_id, location_id=location_id).first()
+        if emp and emp.status != 'active':
+            # No longer here: out of this location's channels (direct messages stay).
+            for m in (
+                db.session.query(ChannelMember)
+                .join(Channel, Channel.channel_id == ChannelMember.channel_id)
+                .filter(ChannelMember.user_id == user_id, Channel.location_id == location_id,
+                        Channel.channel_type != 'direct')
+                .all()
+            ):
+                db.session.delete(m)
+            db.session.commit()
+            self._kick_sockets(user_id)
+            return
+        self.sync_general(location_id)
+
+    def add_user_to_location_channels(self, user_id: int, location_id: int, role_id: int = None):
+        """A new employee joins #general automatically. Role channels are private groups,
+        so nobody is added to them automatically (role_id is accepted for compatibility)."""
+        self.sync_general(location_id)
 
     # ── DM ────────────────────────────────────────────────────────────────────
 
@@ -355,24 +384,118 @@ class MessagingService:
 
     # ── Members ───────────────────────────────────────────────────────────────
 
+    def can_manage(self, channel: Channel, user_id: int) -> str | None:
+        """'manager' (owner/manager at the channel's location), 'admin' (group admin) or None."""
+        if channel.channel_type not in self.MANAGEABLE:
+            return None
+        if channel.location_id:
+            emp = Employment.query.filter_by(user_id=user_id, location_id=channel.location_id, status='active').first()
+            if emp and emp.role and emp.role.name.lower() in ('owner', 'manager'):
+                return 'manager'
+        member = ChannelMember.query.filter_by(channel_id=channel.channel_id, user_id=user_id).first()
+        if member and member.is_admin and self._active_at_channel(channel, user_id):
+            return 'admin'
+        return None
+
+    def _active_at_channel(self, channel: Channel, user_id: int) -> bool:
+        """An active employee of the channel's company (tenant boundary)."""
+        if channel.location_id:
+            comp_id = channel.location.comp_id if channel.location else None
+            return bool(comp_id and Employment.query.filter_by(user_id=user_id, comp_id=comp_id, status='active').first())
+        return bool(self._companies(user_id))
+
     def add_member(self, channel_id: int, user_id: int, added_by: int):
         channel = self._get_channel(channel_id)
-        if channel.channel_type not in ('group', 'broadcast'):
+        if channel.channel_type == 'general':
+            raise ValueError("Everyone at the location is in #general automatically.")
+        if channel.channel_type not in self.MANAGEABLE:
             raise ValueError("Can only add members to groups.")
-        adder = ChannelMember.query.filter_by(channel_id=channel_id, user_id=added_by).first()
-        if not adder or not adder.is_admin:
-            raise PermissionError("Only admins can add members.")
+        if not self.can_manage(channel, added_by):
+            raise PermissionError("Only managers and group admins can add members.")
         if ChannelMember.query.filter_by(channel_id=channel_id, user_id=user_id).first():
             raise ValueError("User is already a member.")
-        if not self._companies(added_by) & self._companies(user_id):
-            raise PermissionError("You can only add people from your company.")
+        if not self._active_at_channel(channel, user_id):
+            # Same answer for other companies' users and unknown IDs.
+            raise PermissionError("You can only add active people from your company.")
         db.session.add(ChannelMember(channel_id=channel_id, user_id=user_id))
         db.session.commit()
+        self._system_message(channel_id, f"{self._user_name(user_id)} was added by {self._user_name(added_by)}.")
+
+    def remove_member(self, channel_id: int, user_id: int, removed_by: int):
+        channel = self._get_channel(channel_id)
+        if channel.channel_type == 'general':
+            raise ValueError("Everyone at the location stays in #general while they work here.")
+        if channel.channel_type not in self.MANAGEABLE:
+            raise ValueError("Can only remove members from groups.")
+        target = ChannelMember.query.filter_by(channel_id=channel_id, user_id=user_id).first()
+        if not target:
+            raise ValueError("They aren't in this group.")
+        power = self.can_manage(channel, removed_by)
+        leaving = user_id == removed_by
+        if not leaving:
+            if not power:
+                raise PermissionError("Only managers and group admins can remove members.")
+            if power == 'admin' and target.is_admin:
+                raise PermissionError("Only a manager can remove another group admin.")
+        db.session.delete(target)
+        db.session.commit()
+        self._kick_sockets(user_id, channel_id)
+        msg = f"{self._user_name(user_id)} left." if leaving else f"{self._user_name(user_id)} was removed by {self._user_name(removed_by)}."
+        self._system_message(channel_id, msg)
+
+    def set_admin(self, channel_id: int, user_id: int, is_admin: bool, changed_by: int):
+        channel = self._get_channel(channel_id)
+        if channel.channel_type not in self.MANAGEABLE:
+            raise ValueError("Group admins exist only in groups.")
+        target = ChannelMember.query.filter_by(channel_id=channel_id, user_id=user_id).first()
+        if not target:
+            raise ValueError("Add them to the group first.")
+        if not self._active_at_channel(channel, user_id):
+            raise PermissionError("Only active people from your company can be group admins.")
+        power = self.can_manage(channel, changed_by)
+        if is_admin:
+            if not power:
+                raise PermissionError("Only managers and group admins can make someone an admin.")
+        else:
+            # Managers demote anyone; an admin may step down themselves.
+            if power != 'manager' and changed_by != user_id:
+                raise PermissionError("Only a manager can remove someone's admin role.")
+        if target.is_admin == is_admin:
+            return target
+        target.is_admin = is_admin
+        db.session.commit()
+        import logging
+        logging.getLogger("proshifts.audit").info(
+            "channel %s: user %s admin=%s by user %s", channel_id, user_id, is_admin, changed_by)
+        self._system_message(channel_id, f"{self._user_name(user_id)} is {'now a group admin' if is_admin else 'no longer a group admin'} "
+                                         f"({self._user_name(changed_by)}).")
+        return target
 
     def get_members(self, channel_id: int, user_id: int):
-        if not ChannelMember.query.filter_by(channel_id=channel_id, user_id=user_id).first():
+        channel = self._get_channel(channel_id)
+        if not ChannelMember.query.filter_by(channel_id=channel_id, user_id=user_id).first() \
+                and self.can_manage(channel, user_id) != 'manager':
             raise PermissionError("Not a member.")
         return ChannelMember.query.filter_by(channel_id=channel_id).all()
+
+    def location_groups(self, location_id: int, user_id: int):
+        """Groups at a location, for its managers (including ones they aren't in)."""
+        emp = Employment.query.filter_by(user_id=user_id, location_id=location_id, status='active').first()
+        if not emp or not emp.role or emp.role.name.lower() not in ('owner', 'manager'):
+            raise PermissionError("Manager access required.")
+        return Channel.query.filter(Channel.location_id == location_id,
+                                    Channel.channel_type.in_(self.MANAGEABLE)).order_by(Channel.name).all()
+
+    @staticmethod
+    def _kick_sockets(user_id: int, channel_id: int = None):
+        """Tell the user's open apps to drop the channel; their sockets leave its room."""
+        try:
+            from extensions import socketio
+            socketio.emit('channel:removed', {"channel_id": channel_id}, room=f'user:{user_id}')
+            from routes.sockets import leave_channel_rooms
+            leave_channel_rooms(user_id, channel_id)
+        except Exception:
+            pass
 
     # ── Serialization ─────────────────────────────────────────────────────────
 
@@ -394,6 +517,7 @@ class MessagingService:
             "shift_id":     channel.shift_id,
             "unread":       unread,
             "member_count": len(channel.members),
+            "can_manage":   self.can_manage(channel, user_id),
             "last_message": self.serialize_message(last_msg, user_id) if last_msg else None,
         }
 

@@ -64,6 +64,21 @@ export async function addMember(channelId: number, userId: number): Promise<void
     await api.post(`/messaging/channels/${channelId}/members`, { user_id: userId });
 }
 
+export async function removeMember(channelId: number, userId: number): Promise<void> {
+    await api.delete(`/messaging/channels/${channelId}/members/${userId}`);
+}
+
+/** Promote to / demote from group admin. Managers can do both; admins can promote. */
+export async function setGroupAdmin(channelId: number, userId: number, isAdmin: boolean): Promise<void> {
+    await api.patch(`/messaging/channels/${channelId}/members/${userId}`, { is_admin: isAdmin });
+}
+
+/** Groups at a location, including ones the manager isn't in (managers only). */
+export async function listLocationGroups(locationId: number): Promise<Channel[]> {
+    const res = await api.get<{ channels: Channel[] }>(`/messaging/locations/${locationId}/groups`);
+    return res.channels;
+}
+
 export async function togglePin(messageId: number): Promise<Message> {
     const res = await api.post<{ message: Message }>(`/messaging/messages/${messageId}/pin`);
     return res.message;
