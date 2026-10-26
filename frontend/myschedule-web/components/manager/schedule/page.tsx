@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CopyPlus, Plus, Send, Sparkles, Users } from "lucide-react";
+import { CalendarDays, CopyPlus, GanttChart, Plus, Rows3, Send, Sparkles, Users } from "lucide-react";
 import { WeekNav } from "@/components/manager/schedule/week-nav";
 import { WeekGrid } from "@/components/manager/schedule/week-grid";
 import { ShiftFormDialog } from "@/components/manager/schedule/shift-form-dialog";
@@ -9,19 +9,33 @@ import { ShiftDetailDialog } from "@/components/manager/schedule/shift-detail-di
 import { ScheduleCopilotDialog } from "@/components/manager/ai/schedule-copilot-dialog";
 import { BulkAddDialog } from "@/components/manager/schedule/bulk-add-dialog";
 import { CopyShiftsDialog, type CopyRequest } from "@/components/manager/schedule/copy-shifts-dialog";
+import { StaffGrid } from "@/components/manager/schedule/staff-grid";
+import { DayTimeline } from "@/components/manager/schedule/day-timeline";
+import { useShiftMover } from "@/components/manager/schedule/use-shift-mover";
+import {
+    EMPTY_FILTERS, ScheduleFilterPanel, activeCount, applyFilters, needsStatus, type ScheduleFilters,
+} from "@/components/manager/schedule/schedule-filters";
 import { useManager } from "@/components/manager/manager-context";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { ErrorState, Skeleton } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
-import { getLaborCost, listShifts, publishWeek, rolesWithStaff } from "@/lib/api/shifts";
+import { getLaborCost, getWeekStatus, listShifts, publishWeek, rolesWithStaff } from "@/lib/api/shifts";
 import { useQuery } from "@/lib/hooks/use-query";
 import { useLiveRefresh } from "@/lib/hooks/use-socket";
 import { addDaysToKey, dateKeyIn, formatHours, formatKey, formatMoney, mondayOfKey, todayKey } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import type { Shift } from "@/lib/types";
 
+type View = "week" | "staff" | "day";
+const VIEWS: { id: View; label: string; icon: typeof Rows3; hint: string }[] = [
+    { id: "week", label: "Week", icon: CalendarDays, hint: "Drag a shift to another day" },
+    { id: "staff", label: "By staff", icon: Rows3, hint: "Drag to another person or day" },
+    { id: "day", label: "Day timeline", icon: GanttChart, hint: "Drag up/down to change the time" },
+];
+
 export default function SchedulePage() {
-    const { location, timezone: tz } = useManager();
+    const { location, locations, setLocationId, timezone: tz } = useManager();
     const toast = useToast();
     const locationId = location?.id ?? null;
     // Weeks are Monday–Sunday at the *location*, whatever the viewer's computer says.
@@ -36,10 +50,20 @@ export default function SchedulePage() {
     );
     const roles = useQuery(locationId ? ["roles", locationId] : null, () => rolesWithStaff(locationId!));
 
+    const [view, setView] = useState<View>("week");
+    const [filters, setFilters] = useState<ScheduleFilters>(EMPTY_FILTERS);
+    const [timelineDay, setTimelineDay] = useState<string | null>(null);
+    // Clock-in / conflict data is only fetched when a filter needs it.
+    const status = useQuery(
+        locationId && needsStatus(filters) ? ["week-status", locationId, weekKey] : null,
+        () => getWeekStatus(locationId!, weekKey)
+    );
+
     // Another manager (or the AI generator) changing this location's schedule.
     useLiveRefresh(locationId, ["shift:updated", "schedule:published"], () => {
         void shifts.refetch();
         void labor.refetch();
+        if (needsStatus(filters)) void status.refetch();
     });
 
     const [formOpen, setFormOpen] = useState(false);
@@ -85,7 +109,27 @@ export default function SchedulePage() {
         return map;
     }, [roles.data]);
 
-    const list = shifts.data ?? [];
+    const list = useMemo(() => shifts.data ?? [], [shifts.data]);
+    const roleOf = useMemo(() => {
+        const map = new Map<number, string>();
+        roles.data?.forEach((r) => r.employees.forEach((e) => map.set(e.user_id, e.role ?? r.role_name)));
+        return map;
+    }, [roles.data]);
+    const statusMap = useMemo(
+        () => (status.data ? new Map(status.data.map((i) => [`${i.shift_id}|${i.user_id}`, i])) : null),
+        [status.data]
+    );
+    const filtered = useMemo(() => applyFilters(list, filters, tz, roleOf, statusMap), [list, filters, tz, roleOf, statusMap]);
+    // Rows/columns in the staff and day views follow the employee and role filters.
+    const visibleUserIds = useMemo(() => {
+        if (filters.userId) return new Set([Number(filters.userId)]);
+        if (filters.role) return new Set([...roleOf].filter(([, r]) => r === filters.role).map(([u]) => u));
+        if (activeCount(filters)) return new Set(filtered.flatMap((s) => s.assignments.map((a) => a.user_id)));
+        return null;
+    }, [filters, roleOf, filtered]);
+    const showOpen = !filters.userId && filters.assignment !== "assigned" && !filters.clock && !filters.flag;
+    const dayForTimeline = filters.day || timelineDay || (todayKey(tz) >= weekKey && todayKey(tz) <= addDaysToKey(weekKey, 6) ? todayKey(tz) : weekKey);
+
     const draftCount = list.filter((s) => s.status === "draft").length;
     const openCount = list.filter((s) => s.status !== "cancelled" && s.assignments.length === 0).length;
 
@@ -98,6 +142,11 @@ export default function SchedulePage() {
         setSelected((cur) => (cur?.shift_id === shift.shift_id ? shift : cur));
         void labor.refetch();
     }
+
+    const mover = useShiftMover((shift) => {
+        upsert(shift);
+        if (needsStatus(filters)) void status.refetch();
+    }, names);
 
     function openCreate(date: string) {
         setEditing(null);
@@ -171,25 +220,114 @@ export default function SchedulePage() {
                 <ErrorState message={`Couldn't load staff: ${roles.error.message}`} onRetry={roles.refetch} />
             )}
 
+            {locationId && (
+                <ScheduleFilterPanel
+                    value={filters}
+                    onChange={setFilters}
+                    weekStart={weekKey}
+                    roles={roles.data ?? []}
+                    locations={locations}
+                    locationId={locationId}
+                    onLocation={setLocationId}
+                    statusLoading={status.loading}
+                    shown={filtered.length}
+                    total={list.length}
+                />
+            )}
+            {status.error && <ErrorState message={`Couldn't load clock-in data: ${status.error.message}`} onRetry={status.refetch} />}
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+                <div role="tablist" aria-label="Schedule view" className="inline-flex rounded-lg border border-border bg-card p-0.5">
+                    {VIEWS.map((v) => {
+                        const Icon = v.icon;
+                        return (
+                            <button
+                                key={v.id}
+                                role="tab"
+                                aria-selected={view === v.id}
+                                onClick={() => setView(v.id)}
+                                className={cn(
+                                    "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                                    view === v.id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                                )}
+                            >
+                                <Icon className="size-4" /> {v.label}
+                            </button>
+                        );
+                    })}
+                </div>
+                {view === "day" && !filters.day ? (
+                    <div className="flex flex-wrap gap-1" role="group" aria-label="Day">
+                        {Array.from({ length: 7 }, (_, i) => addDaysToKey(weekKey, i)).map((d) => (
+                            <button
+                                key={d}
+                                onClick={() => setTimelineDay(d)}
+                                aria-pressed={d === dayForTimeline}
+                                className={cn(
+                                    "rounded-md border px-2 py-1 text-xs",
+                                    d === dayForTimeline ? "border-primary bg-primary/10 font-semibold text-primary" : "border-border text-muted-foreground hover:text-foreground"
+                                )}
+                            >
+                                {formatKey(d, { weekday: "short", month: undefined, day: undefined })} {Number(d.slice(8, 10))}
+                            </button>
+                        ))}
+                    </div>
+                ) : (
+                    <p className="text-xs text-muted-foreground">{VIEWS.find((v) => v.id === view)?.hint} · changes are checked before they&apos;re saved</p>
+                )}
+            </div>
+
             {shifts.loading ? (
                 <div className="grid grid-cols-7 gap-3">
                     {Array.from({ length: 7 }, (_, i) => (
                         <Skeleton key={i} className="h-[400px]" />
                     ))}
                 </div>
-            ) : (
+            ) : view === "week" ? (
                 <WeekGrid
                     weekStart={weekKey}
                     tz={tz}
-                    shifts={list}
+                    shifts={filtered}
                     names={names}
                     onAddShift={openCreate}
                     onShiftClick={setSelected}
                     onCopyDay={(day, dayShifts) =>
                         setCopyReq({ mode: "days", title: `Copy ${formatKey(day, { weekday: "long", month: "short", day: "numeric" })}`, shifts: dayShifts, sourceDate: day })
                     }
+                    onDropShift={(shift, day) =>
+                        mover.move(shift, { date: day }, `Shift moved to ${formatKey(day, { weekday: "long", month: "short", day: "numeric" })}`)
+                    }
+                    busyId={mover.busyId}
+                />
+            ) : view === "staff" ? (
+                <StaffGrid
+                    weekStart={weekKey}
+                    tz={tz}
+                    shifts={filtered}
+                    roles={roles.data ?? []}
+                    names={names}
+                    visibleUserIds={visibleUserIds}
+                    showOpenRow={showOpen}
+                    onShiftClick={setSelected}
+                    onAddShift={openCreate}
+                    onDropShift={mover.move}
+                    busyId={mover.busyId}
+                />
+            ) : (
+                <DayTimeline
+                    day={dayForTimeline}
+                    tz={tz}
+                    shifts={filtered}
+                    roles={roles.data ?? []}
+                    names={names}
+                    visibleUserIds={visibleUserIds}
+                    showOpenColumn={showOpen}
+                    onShiftClick={setSelected}
+                    onDropShift={mover.move}
+                    busyId={mover.busyId}
                 />
             )}
+            {mover.dialog}
 
             {locationId && (
                 <ShiftFormDialog
@@ -251,6 +389,9 @@ export default function SchedulePage() {
                 names={names}
                 onEdit={openEdit}
                 onChanged={upsert}
+                onReplace={(shift, from, to) =>
+                    mover.move(shift, { from_user_id: from, to_user_id: to }, `${names.get(to) ?? "They"} replaced ${names.get(from) ?? "them"}`)
+                }
                 onDuplicate={(shift) => {
                     setSelected(null);
                     setCopyReq({

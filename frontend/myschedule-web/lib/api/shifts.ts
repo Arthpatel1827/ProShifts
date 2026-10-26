@@ -1,5 +1,5 @@
 import { ApiError, api, qs } from "./client";
-import type { Shift, LaborCost, RoleWithStaff, ShiftInput, ShiftStatus } from "@/lib/types";
+import type { Shift, LaborCost, MoveResult, MoveTarget, RoleWithStaff, ShiftInput, ShiftStatus } from "@/lib/types";
 
 export async function listShifts(
     locationId: number,
@@ -28,6 +28,33 @@ export async function updateShift(
 ): Promise<Shift> {
     const res = await api.put<{ shift: Shift }>(`/shifts/${shiftId}`, input);
     return res.shift;
+}
+
+/** Like updateShift, plus the non-blocking warnings (overtime, role) for assigned staff.
+ *  Rejected with SCHEDULE_CONFLICT (409) if a new time clashes for someone on the shift,
+ *  or OUTSIDE_AVAILABILITY until the manager confirms with allow_outside_availability. */
+export async function editShift(
+    shiftId: number,
+    input: Partial<Omit<ShiftInput, "location_id">>
+): Promise<{ shift: Shift; warnings: string[] }> {
+    const res = await api.put<{ shift: Shift; warnings?: string[] }>(`/shifts/${shiftId}`, input);
+    return { shift: res.shift, warnings: res.warnings ?? [] };
+}
+
+/** Drag & drop: one validated change of day, start time and/or person. */
+export function moveShift(
+    shiftId: number,
+    target: MoveTarget,
+    allowOutsideAvailability = false
+): Promise<MoveResult> {
+    return api.post<MoveResult>(`/shifts/${shiftId}/move`, {
+        ...target,
+        allow_outside_availability: allowOutsideAvailability,
+    });
+}
+
+export function isScheduleConflict(err: unknown): err is ApiError {
+    return err instanceof ApiError && err.code === "SCHEDULE_CONFLICT";
 }
 
 /** DELETE /shifts/:id cancels the shift (status → cancelled); it is not a hard delete. */
@@ -118,4 +145,21 @@ export function copyShifts(
         include_assignees: includeAssignees,
         allow_outside_availability: allowOutsideAvailability,
     });
+}
+
+export type ClockStatus = "not_started" | "working" | "on_break" | "ended" | "late" | "missed";
+export type ScheduleFlag = "availability" | "overtime" | "conflict";
+export type WeekStatusItem = {
+    shift_id: number;
+    user_id: number;
+    /** null for drafts: nobody works a draft. */
+    clock_status: ClockStatus | null;
+    late_arrival: boolean;
+    flags: ScheduleFlag[];
+};
+
+/** Clock status and scheduling flags per (shift, person) for the week — for filters. */
+export async function getWeekStatus(locationId: number, weekStart: string): Promise<WeekStatusItem[]> {
+    const res = await api.get<{ items: WeekStatusItem[] }>(`/shifts/week-status${qs({ location_id: locationId, week_start: weekStart })}`);
+    return res.items;
 }

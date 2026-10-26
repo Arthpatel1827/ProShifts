@@ -1,7 +1,10 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Copy, Plus } from "lucide-react";
 import { ShiftCard } from "./shift-card";
+import { DRAG_MIME, dragState } from "./drag-state";
+import { cn } from "@/lib/utils";
 import { addDaysToKey, dateKeyIn, formatHours, formatKey, shiftHours, todayKey } from "@/lib/format";
 import type { Shift } from "@/lib/types";
 
@@ -16,9 +19,15 @@ type WeekGridProps = {
     onShiftClick: (shift: Shift) => void;
     /** Copy all of a day's shifts to other days. */
     onCopyDay?: (dateKey: string, shifts: Shift[]) => void;
+    /** Drag & drop a shift onto another day (same times, same people). */
+    onDropShift?: (shift: Shift, dateKey: string) => void;
+    busyId?: number | null;
 };
 
-export function WeekGrid({ weekStart, tz, shifts, names, onAddShift, onShiftClick, onCopyDay }: WeekGridProps) {
+export function WeekGrid({ weekStart, tz, shifts, names, onAddShift, onShiftClick, onCopyDay, onDropShift, busyId }: WeekGridProps) {
+    const [over, setOver] = useState<string | null>(null);
+    // Drag cancelled (Esc, dropped outside): clear the highlight.
+    useEffect(() => dragState.subscribe(() => !dragState.get() && setOver(null)), []);
     const days = Array.from({ length: 7 }, (_, i) => addDaysToKey(weekStart, i));
     const today = todayKey(tz);
 
@@ -41,10 +50,34 @@ export function WeekGrid({ weekStart, tz, shifts, names, onAddShift, onShiftClic
                         .filter((s) => s.status !== "cancelled")
                         .reduce((sum, s) => sum + shiftHours(s.start_time, s.end_time, s.break_minutes), 0);
 
+                    const dragging = dragState.get();
+                    const sameDay = !!dragging && dateKeyIn(dragging.shift.start_time, tz) === key;
                     return (
                         <div
                             key={key}
-                            className={`flex min-h-[400px] flex-col rounded-lg border ${isToday ? "border-primary" : "border-border"} bg-card`}
+                            data-day={key}
+                            onDragOver={(e) => {
+                                if (!onDropShift || !e.dataTransfer.types.includes(DRAG_MIME)) return;
+                                e.preventDefault();
+                                e.dataTransfer.dropEffect = sameDay ? "none" : "move";
+                                if (over !== key) setOver(key);
+                            }}
+                            onDragLeave={(e) => {
+                                if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver((o) => (o === key ? null : o));
+                            }}
+                            onDrop={(e) => {
+                                e.preventDefault();
+                                setOver(null);
+                                const item = dragState.get();
+                                dragState.set(null);
+                                if (item && onDropShift && dateKeyIn(item.shift.start_time, tz) !== key) onDropShift(item.shift, key);
+                            }}
+                            className={cn(
+                                "flex min-h-[400px] flex-col rounded-lg border bg-card transition-colors",
+                                isToday ? "border-primary" : "border-border",
+                                over === key && !sameDay && "border-primary bg-primary/5 ring-2 ring-primary/30",
+                                over === key && sameDay && "border-dashed border-muted-foreground/40"
+                            )}
                         >
                             <div
                                 className={`flex items-center justify-between border-b border-border px-3 py-2 ${isToday ? "bg-primary/5" : ""}`}
@@ -100,6 +133,8 @@ export function WeekGrid({ weekStart, tz, shifts, names, onAddShift, onShiftClic
                                             tz={tz}
                                             names={names}
                                             onClick={() => onShiftClick(shift)}
+                                            draggable={!!onDropShift}
+                                            busy={busyId === shift.shift_id}
                                         />
                                     ))
                                 )}

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Clock, Coffee, Copy, MessageSquare, Pencil, StickyNote, Trash2, UserMinus, UserPlus } from "lucide-react";
+import { ArrowLeftRight, Clock, Coffee, Copy, MessageSquare, Pencil, StickyNote, Trash2, UserMinus, UserPlus } from "lucide-react";
 import { Dialog, ConfirmDialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/form";
@@ -10,7 +10,7 @@ import { Avatar, Badge } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { assignUser, cancelShift, isOutsideAvailability, unassignUser } from "@/lib/api/shifts";
 import { createShiftThread } from "@/lib/api/messaging";
-import { formatDate, formatHours, formatTimeRange, shiftHours } from "@/lib/format";
+import { formatDate, formatHours, formatTime, formatTimeRange, shiftHours } from "@/lib/format";
 import { shiftStatusTone } from "@/lib/theme/tokens";
 import type { RoleWithStaff, Shift } from "@/lib/types";
 
@@ -25,10 +25,13 @@ type Props = {
     onChanged: (shift: Shift) => void;
     /** Copy this shift to other days. */
     onDuplicate?: (shift: Shift) => void;
+    /** Hand this shift from one person to another in one validated change. */
+    onReplace?: (shift: Shift, fromUserId: number, toUserId: number) => void;
 };
 
-export function ShiftDetailDialog({ shift, tz, onOpenChange, roles, names, onEdit, onChanged, onDuplicate }: Props) {
+export function ShiftDetailDialog({ shift, tz, onOpenChange, roles, names, onEdit, onChanged, onDuplicate, onReplace }: Props) {
     const toast = useToast();
+    const [replacing, setReplacing] = useState<{ from: number; to: string } | null>(null);
     const [assignee, setAssignee] = useState("");
     const [busy, setBusy] = useState<string | null>(null);
     const [confirmCancel, setConfirmCancel] = useState(false);
@@ -166,6 +169,15 @@ export function ShiftDetailDialog({ shift, tz, onOpenChange, roles, names, onEdi
                                 {shift.break_minutes} min break · {formatHours(Math.round(hours * 10) / 10)} paid
                             </dd>
                         </div>
+                        {!!shift.breaks?.length && (
+                            <div className="col-span-2 flex items-start gap-2">
+                                <Coffee className="mt-0.5 size-4 text-muted-foreground" />
+                                <dt className="sr-only">Planned breaks</dt>
+                                <dd className="text-muted-foreground">
+                                    Breaks: {shift.breaks.map((b) => `${formatTime(b.start_time, tz)}–${formatTime(b.end_time, tz)}`).join(", ")}
+                                </dd>
+                            </div>
+                        )}
                         {shift.notes && (
                             <div className="col-span-2 flex items-start gap-2">
                                 <StickyNote className="mt-0.5 size-4 text-muted-foreground" />
@@ -187,10 +199,44 @@ export function ShiftDetailDialog({ shift, tz, onOpenChange, roles, names, onEdi
                             <ul className="divide-y divide-border rounded-md border border-border">
                                 {shift.assignments.map((a) => {
                                     const name = names.get(a.user_id) ?? `Employee #${a.user_id}`;
+                                    if (replacing?.from === a.user_id) {
+                                        return (
+                                            <li key={a.user_id} className="flex flex-wrap items-center gap-2 px-3 py-2">
+                                                <span className="text-sm">Replace {name} with</span>
+                                                <Select
+                                                    aria-label={`Replace ${name} with`}
+                                                    value={replacing.to}
+                                                    onChange={(e) => setReplacing({ from: a.user_id, to: e.target.value })}
+                                                    className="h-8 w-auto flex-1"
+                                                >
+                                                    <option value="">Choose someone…</option>
+                                                    {candidates.map((c) => (
+                                                        <option key={c.user_id} value={c.user_id}>{c.name}{c.role ? ` · ${c.role}` : ""}</option>
+                                                    ))}
+                                                </Select>
+                                                <Button size="sm" disabled={!replacing.to} onClick={() => {
+                                                    onReplace?.(shift, a.user_id, Number(replacing.to));
+                                                    setReplacing(null);
+                                                }}>Replace</Button>
+                                                <Button size="sm" variant="ghost" onClick={() => setReplacing(null)}>Cancel</Button>
+                                            </li>
+                                        );
+                                    }
                                     return (
                                         <li key={a.user_id} className="flex items-center gap-3 px-3 py-2">
                                             <Avatar name={name} className="size-7" />
                                             <span className="flex-1 text-sm">{name}</span>
+                                            {!isCancelled && onReplace && (
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    onClick={() => setReplacing({ from: a.user_id, to: "" })}
+                                                    disabled={!!busy || !candidates.length}
+                                                    aria-label={`Replace ${name}`}
+                                                >
+                                                    <ArrowLeftRight /> Replace
+                                                </Button>
+                                            )}
                                             {!isCancelled && (
                                                 <Button
                                                     variant="ghost"
