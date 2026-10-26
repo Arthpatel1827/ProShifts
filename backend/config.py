@@ -35,7 +35,10 @@ class Config:
 
     SOCKETIO_MESSAGE_QUEUE = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     RATELIMIT_STORAGE_URI = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    RATELIMIT_DEFAULT = "200 per day;50 per hour"
+    # Per signed-in user (or per IP when anonymous). The schedule and dashboard make ~10
+    # calls per page plus refreshes, so the old 50/hour locked managers out mid-task.
+    RATELIMIT_DEFAULT = os.getenv("RATELIMIT_DEFAULT", "3000 per hour;300 per minute")
+    RATELIMIT_HEADERS_ENABLED = True
 
     # NVIDIA Nemotron (OpenAI-compatible API). Server-side only — never sent to clients.
     NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")

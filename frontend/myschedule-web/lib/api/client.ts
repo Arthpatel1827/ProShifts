@@ -29,6 +29,8 @@ async function readBody(res: Response): Promise<unknown> {
 }
 
 function messageFrom(body: unknown, status: number): string {
+    // Flask-Limiter's own text ("50 per 1 hour") means nothing to a manager.
+    if (status === 429) return "Too many requests right now. Wait a moment and try again.";
     if (body && typeof body === "object") {
         const b = body as Record<string, unknown>;
         if (typeof b.error === "string") return b.error;

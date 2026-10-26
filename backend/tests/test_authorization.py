@@ -84,3 +84,15 @@ def test_time_off_pending_includes_employee_name(client, world):
     # owner_b is an owner, but of a different company.
     rid = pending[0]["request_id"]
     assert client.post(f"/time-off/{rid}/decide", headers=world.headers(world.owner_b), json={"approve": True}).status_code == 403
+
+
+def test_rate_limits_are_per_user_not_per_server_ip(app, world):
+    # Every web request reaches Flask from the Next.js server's one IP; keying limits by
+    # IP made all managers share a single bucket.
+    from extensions import rate_limit_key
+    with app.test_request_context("/shifts/", headers=world.headers(world.manager_a), environ_base={"REMOTE_ADDR": "10.0.0.5"}):
+        assert rate_limit_key() == f"user:{world.manager_a}"
+    with app.test_request_context("/shifts/", headers=world.headers(world.owner_b), environ_base={"REMOTE_ADDR": "10.0.0.5"}):
+        assert rate_limit_key() == f"user:{world.owner_b}"
+    with app.test_request_context("/auth/login", environ_base={"REMOTE_ADDR": "10.0.0.5"}):
+        assert rate_limit_key() == "10.0.0.5"

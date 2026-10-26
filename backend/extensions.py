@@ -19,12 +19,29 @@ convention = {
     "pk": "pk_%(table_name)s",
 }
 
+def rate_limit_key():
+    """Signed-in requests are limited per user, anonymous ones per client IP.
+
+    Keying everything by IP meant every web user shared the Next.js server's
+    single IP, and so a single bucket.
+    """
+    from flask_jwt_extended import get_jwt_identity, verify_jwt_in_request
+    try:
+        verify_jwt_in_request(optional=True)
+        identity = get_jwt_identity()
+        if identity:
+            return f"user:{identity}"
+    except Exception:
+        pass  # expired/invalid token: treat as anonymous
+    return get_remote_address()
+
+
 db       = SQLAlchemy(metadata=MetaData(naming_convention=convention))
 migrate  = Migrate()
 jwt      = JWTManager()
 mail     = Mail()
 bcrypt   = Bcrypt()
-limiter  = Limiter(key_func=get_remote_address)
+limiter  = Limiter(key_func=rate_limit_key)
 socketio = SocketIO(cors_allowed_origins="*", async_mode="eventlet")
 celery   = Celery()
 
