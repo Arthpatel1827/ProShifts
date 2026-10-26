@@ -12,6 +12,7 @@ import { useManager } from "./manager-context";
 const PAGE_TITLES: Record<string, string> = {
     "/manager/dashboard": "Dashboard",
     "/manager/schedule": "Schedule",
+    "/manager/timesheets": "Timesheets",
     "/manager/team": "Team",
     "/manager/analytics": "Analytics",
     "/manager/requests": "Requests",

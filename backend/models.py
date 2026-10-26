@@ -73,7 +73,8 @@ class AppUser(db.Model):
         foreign_keys="[ShiftAssignment.user_id]",
     )
     notifications = db.relationship("Notification",  back_populates="user", cascade="all, delete-orphan")
-    time_entries  = db.relationship("TimeEntry",     back_populates="user", cascade="all, delete-orphan")
+    time_entries  = db.relationship("TimeEntry",     back_populates="user", cascade="all, delete-orphan",
+                                    foreign_keys="[TimeEntry.user_id]")
 
 
 # ── 4. UserDocument ───────────────────────────────────────────────────────────
@@ -283,8 +284,11 @@ class TimeEntry(db.Model):
     total_minutes = db.Column(Integer, nullable=True)
     notes         = db.Column(Text, nullable=True)
     created_at    = db.Column(DateTime, nullable=False, default=datetime.utcnow)
+    # Last manager correction (the full history is in time_entry_audit).
+    corrected_at  = db.Column(DateTime, nullable=True)
+    corrected_by  = db.Column(BigInteger, db.ForeignKey("app_user.user_id", ondelete="SET NULL"), nullable=True)
 
-    user   = db.relationship("AppUser", back_populates="time_entries")
+    user   = db.relationship("AppUser", back_populates="time_entries", foreign_keys=[user_id])
     shift  = db.relationship("Shift",   back_populates="time_entries")
     breaks = db.relationship(
         "BreakEntry",
@@ -310,6 +314,25 @@ class BreakEntry(db.Model):
     duration_minutes = db.Column(Integer, nullable=True)
 
     time_entry = db.relationship("TimeEntry", back_populates="breaks")
+
+
+# ── 13b. TimeEntryAudit ────────────────────────────────────────────────────────
+class TimeEntryAudit(db.Model):
+    """Every manager correction to worked time: who, when, what it was, what it became,
+    and why. Rows are only ever added."""
+    __tablename__ = "time_entry_audit"
+
+    audit_id   = db.Column(BigInteger, primary_key=True)
+    entry_id   = db.Column(BigInteger, db.ForeignKey("time_entry.entry_id", ondelete="CASCADE"), nullable=False, index=True)
+    break_id   = db.Column(BigInteger, nullable=True)
+    changed_by = db.Column(BigInteger, db.ForeignKey("app_user.user_id", ondelete="SET NULL"), nullable=True)
+    changed_at = db.Column(DateTime, nullable=False, default=datetime.utcnow)
+    action     = db.Column(Text, nullable=False)   # clock_in | clock_out | break_added | break_changed | break_removed
+    old_value  = db.Column(Text, nullable=True)
+    new_value  = db.Column(Text, nullable=True)
+    reason     = db.Column(Text, nullable=False)
+
+    changer = db.relationship("AppUser", foreign_keys=[changed_by])
 
 
 # ── 14. OnboardingInvite ──────────────────────────────────────────────────────

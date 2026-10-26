@@ -10,6 +10,7 @@ import {
     ListChecks,
     MessageSquare,
     Settings,
+    Clock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useManager } from "./manager-context";
@@ -17,6 +18,7 @@ import { useManager } from "./manager-context";
 const NAV_ITEMS = [
     { href: "/manager/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/manager/schedule", label: "Schedule", icon: Calendar },
+    { href: "/manager/timesheets", label: "Timesheets", icon: Clock },
     { href: "/manager/team", label: "Team", icon: Users },
     { href: "/manager/analytics", label: "Analytics", icon: BarChart3 },
     { href: "/manager/requests", label: "Requests", icon: ListChecks, badge: "pending" as const },

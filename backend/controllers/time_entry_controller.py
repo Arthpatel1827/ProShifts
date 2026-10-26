@@ -258,3 +258,67 @@ class TimeEntryController:
 
         # date/timezone tell clients which local day "today" refers to.
         return jsonify({"team": team_status, "date": today.isoformat(), "timezone": tz.key}), 200
+    # ── Manager corrections (worked time, audited) ────────────────────────────
+    def _run(self, fn, status=200):
+        try:
+            return fn(), status
+        except PermissionError as e:
+            return {"error": str(e)}, 403
+        except ValueError as e:
+            return {"error": str(e)}, 400
+
+    def _entry_out(self, entry):
+        data = svc.serialize(entry)
+        u = entry.user
+        data["employee_name"] = (u.display_name or u.username) if u else None
+        if entry.shift:
+            data["shift"] = {"shift_id": entry.shift.shift_id, "start_time": entry.shift.start_time.isoformat(),
+                             "end_time": entry.shift.end_time.isoformat(),
+                             "role": entry.shift.role.name if entry.shift.role else None}
+        return data
+
+    def list_for_location(self):
+        user_id = int(get_jwt_identity())
+        location_id = request.args.get("location_id", type=int)
+        if not location_id:
+            return jsonify({"error": "location_id is required"}), 400
+        body, code = self._run(lambda: {"entries": [self._entry_out(e) for e in svc.list_for_location(
+            manager_user_id=user_id, location_id=location_id, week_start=request.args.get("week_start"))]})
+        return jsonify(body), code
+
+    def correct_entry(self, entry_id):
+        user_id = int(get_jwt_identity())
+        d = request.get_json(silent=True) or {}
+        body, code = self._run(lambda: {"entry": self._entry_out(svc.correct_entry(
+            manager_user_id=user_id, entry_id=entry_id, reason=d.get("reason"),
+            clock_in=d.get("clock_in"), clock_out=d.get("clock_out")))})
+        return jsonify(body), code
+
+    def add_break(self, entry_id):
+        user_id = int(get_jwt_identity())
+        d = request.get_json(silent=True) or {}
+        body, code = self._run(lambda: {"entry": self._entry_out(svc.add_break(
+            manager_user_id=user_id, entry_id=entry_id, reason=d.get("reason"),
+            break_start=d.get("break_start"), break_end=d.get("break_end")))}, 201)
+        return jsonify(body), code
+
+    def update_break(self, break_id):
+        user_id = int(get_jwt_identity())
+        d = request.get_json(silent=True) or {}
+        body, code = self._run(lambda: {"entry": self._entry_out(svc.update_break(
+            manager_user_id=user_id, break_id=break_id, reason=d.get("reason"),
+            break_start=d.get("break_start"), break_end=d.get("break_end")))})
+        return jsonify(body), code
+
+    def delete_break(self, break_id):
+        user_id = int(get_jwt_identity())
+        d = request.get_json(silent=True) or {}
+        body, code = self._run(lambda: {"entry": self._entry_out(svc.delete_break(
+            manager_user_id=user_id, break_id=break_id, reason=d.get("reason")))})
+        return jsonify(body), code
+
+    def audit_log(self, entry_id):
+        user_id = int(get_jwt_identity())
+        body, code = self._run(lambda: {"history": [svc.serialize_audit(a) for a in svc.audit_log(
+            manager_user_id=user_id, entry_id=entry_id)]})
+        return jsonify(body), code

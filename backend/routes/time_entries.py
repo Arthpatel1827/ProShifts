@@ -82,3 +82,34 @@ def generate_pin():
 @jwt_required()
 def get_team_status():
     return ctrl.get_team_status()
+
+# ── Manager corrections to worked time (audited) ──────────────────────────────
+@router.get("/manage")
+@jwt_required()
+def list_for_location():
+    return ctrl.list_for_location()
+
+@router.patch("/<int:entry_id>")
+@jwt_required()
+def correct_entry(entry_id):
+    return ctrl.correct_entry(entry_id)
+
+@router.post("/<int:entry_id>/breaks")
+@jwt_required()
+def add_break(entry_id):
+    return ctrl.add_break(entry_id)
+
+@router.patch("/breaks/<int:break_id>")
+@jwt_required()
+def update_break(break_id):
+    return ctrl.update_break(break_id)
+
+@router.delete("/breaks/<int:break_id>")
+@jwt_required()
+def delete_break(break_id):
+    return ctrl.delete_break(break_id)
+
+@router.get("/<int:entry_id>/audit")
+@jwt_required()
+def audit_log(entry_id):
+    return ctrl.audit_log(entry_id)
