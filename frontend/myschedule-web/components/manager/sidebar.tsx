@@ -49,9 +49,9 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
             >
                 <div className="flex h-16 items-center gap-2 px-6">
                     <span className="flex size-7 items-center justify-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">
-                        M
+                        P
                     </span>
-                    <span className="text-lg font-semibold text-foreground">MySchedule</span>
+                    <span className="text-lg font-semibold text-foreground">ProShifts</span>
                 </div>
 
                 <nav className="flex-1 space-y-1 px-3 py-4" aria-label="Manager navigation">
@@ -91,7 +91,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
                 </nav>
 
                 <p className="px-6 pb-5 text-[11px] leading-relaxed text-muted-foreground">
-                    Staff clock in from the MySchedule mobile app.
+                    Staff clock in from the ProShifts mobile app.
                 </p>
             </aside>
         </>

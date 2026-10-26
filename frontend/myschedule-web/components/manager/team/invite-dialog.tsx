@@ -72,7 +72,7 @@ export function InviteDialog({ open, onOpenChange, locationId, roles, onInvited 
             open={open}
             onOpenChange={(o) => !sending && onOpenChange(o)}
             title={unsent ? "Account created" : "Invite staff"}
-            description={unsent ? undefined : "They'll receive an email with a temporary password to sign in to the MySchedule app."}
+            description={unsent ? undefined : "They'll receive an email with a temporary password to sign in to the ProShifts app."}
             footer={
                 unsent ? (
                     <Button onClick={() => onOpenChange(false)}>Done</Button>

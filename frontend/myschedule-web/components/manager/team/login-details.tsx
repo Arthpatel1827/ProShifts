@@ -24,7 +24,7 @@ export function LoginDetails({ email, password }: { email: string; password: str
                 <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
                 <p className="text-foreground">
                     <span className="font-medium">The email wasn&apos;t sent.</span> Share these login details with them directly. They
-                    sign in to the MySchedule mobile app and should change the password right away.
+                    sign in to the ProShifts mobile app and should change the password right away.
                 </p>
             </div>
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 rounded-lg border border-border px-4 py-3 text-sm">

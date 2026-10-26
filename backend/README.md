@@ -1,4 +1,4 @@
-# MySchedule API
+# ProShifts API
 
 Flask 3 · PostgreSQL · SQLAlchemy 2 · Alembic · Flask-JWT-Extended · Flask-SocketIO (eventlet + Redis) · REST and GraphQL.
 

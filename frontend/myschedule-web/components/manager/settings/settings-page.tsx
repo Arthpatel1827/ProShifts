@@ -162,7 +162,7 @@ export default function SettingsPage() {
                     <div className="flex items-start gap-3 px-5 py-4 text-sm">
                         <Smartphone className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                         <p className="text-muted-foreground">
-                            Managers clock staff in and out from <span className="font-medium text-foreground">Clock Mgmt</span> in the MySchedule mobile app.
+                            Managers clock staff in and out from <span className="font-medium text-foreground">Clock Mgmt</span> in the ProShifts mobile app.
                         </p>
                     </div>
                 </Card>

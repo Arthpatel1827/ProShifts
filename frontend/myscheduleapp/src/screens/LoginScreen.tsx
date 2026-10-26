@@ -150,7 +150,7 @@ export default function LoginScreen({ navigation }: any) {
                         <View style={styles.logoWrap}>
                             <Ionicons name="calendar-outline" size={36} color="#fff" />
                         </View>
-                        <Text style={styles.appName}>MySchedule</Text>
+                        <Text style={styles.appName}>ProShifts</Text>
                         <Text style={styles.tagline}>Shift management, simplified</Text>
                     </View>
 

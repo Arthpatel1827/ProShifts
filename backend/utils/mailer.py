@@ -38,7 +38,7 @@ def send_email_verification_email(to_email: str, verify_url: str) -> None:
         subject="Verify your email",
         recipients=[to_email],
         html=f"""
-            <p>Welcome to Work Scheduler!</p>
+            <p>Welcome to ProShifts!</p>
             <p>Please confirm your email address by clicking the button below:</p>
             <p style="margin: 24px 0;">
               <a href="{verify_url}"
@@ -80,7 +80,7 @@ def send_onboarding_email(
         recipients=[to_email],
         html=f"""
             <p>You have been added as a staff member at <strong>{company_name}</strong> ({location_name}).</p>
-            <p>You can now log into the Work Scheduler mobile app using:</p>
+            <p>You can now log into the ProShifts mobile app using:</p>
             <ul>
               <li><strong>Username:</strong> {to_email}</li>
               <li><strong>Temporary password:</strong> {temp_password}</li>

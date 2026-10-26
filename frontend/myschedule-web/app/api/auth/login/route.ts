@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
             cache: "no-store",
         });
     } catch {
-        return NextResponse.json({ error: "The MySchedule API is unreachable. Try again shortly." }, { status: 502 });
+        return NextResponse.json({ error: "The ProShifts API is unreachable. Try again shortly." }, { status: 502 });
     }
 
     const data = await flaskRes.json().catch(() => ({}));

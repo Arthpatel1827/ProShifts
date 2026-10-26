@@ -1,4 +1,4 @@
-# MySchedule — manager web app
+# ProShifts — manager web app
 
 Next.js 16 (App Router) · TypeScript · Tailwind CSS v4 · shadcn/ui on Base UI.
 

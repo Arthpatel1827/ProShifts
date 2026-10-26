@@ -51,7 +51,7 @@ class OnboardingService:
             )
             if other_company:
                 raise ValueError(
-                    "This email already has a MySchedule account with another company."
+                    "This email already has a ProShifts account with another company."
                 )
             user.user_password = password_hash
             if not user.is_verified:

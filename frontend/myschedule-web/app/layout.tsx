@@ -16,11 +16,11 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "MySchedule",
-    template: "%s · MySchedule",
+    default: "ProShifts",
+    template: "%s · ProShifts",
   },
   description: "Scheduling, time tracking and team communication for hourly teams.",
-  applicationName: "MySchedule",
+  applicationName: "ProShifts",
   robots: { index: false, follow: false },
 };
 

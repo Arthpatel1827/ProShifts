@@ -49,7 +49,7 @@ async function forward(req: NextRequest, path: string[]): Promise<NextResponse> 
             }
         }
     } catch {
-        return NextResponse.json({ error: "The MySchedule API is unreachable." }, { status: 502 });
+        return NextResponse.json({ error: "The ProShifts API is unreachable." }, { status: 502 });
     }
 
     if (flaskRes.status === 401) await clearSessionCookies();

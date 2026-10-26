@@ -107,7 +107,7 @@ def create_app():
 
     @app.get("/")
     def root():
-        return jsonify({"message": "Work Scheduler API 🚀", "version": "2.0.0"})
+        return jsonify({"message": "ProShifts API 🚀", "version": "2.0.0"})
 
     @app.get("/health")
     def health():
