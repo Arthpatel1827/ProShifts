@@ -145,16 +145,17 @@ export default function ShiftRing({
                         strokeOpacity={arcOpacity}
                     />
                 </Svg>
-                <View style={styles.center}>
+                {/* Keep the text inside the ring's hole; long times shrink rather than spill out. */}
+                <View style={[styles.center, { paddingHorizontal: strokeWidth + size * 0.08 }]}>
                     <Ionicons name={icon} size={isCompact ? 16 : 22} color={toneColor} />
                     <Text style={[styles.label, { color: toneColor, fontSize: isCompact ? 9 : 11 }]}>
                         {label}
                     </Text>
-                    <Text style={[styles.primary, { fontSize: isCompact ? 16 : 26 }]} numberOfLines={1}>
+                    <Text style={[styles.primary, { fontSize: isCompact ? 16 : 26 }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
                         {primaryText}
                     </Text>
                     {secondaryText ? (
-                        <Text style={[styles.secondary, { fontSize: isCompact ? 10 : 12 }]} numberOfLines={1}>
+                        <Text style={[styles.secondary, { fontSize: isCompact ? 10 : 12 }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
                             {secondaryText}
                         </Text>
                     ) : null}
