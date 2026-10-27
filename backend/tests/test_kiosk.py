@@ -137,7 +137,8 @@ def test_cross_company_pin_does_not_unlock(app, client, world):
 
 
 def test_outside_clock_in_window(client, world):
-    shift_now(world, world.staff_a, minutes_from_now=120)
+    # 45 min ahead: too early, yet still "today" for the tablet even just before midnight.
+    shift_now(world, world.staff_a, minutes_from_now=45)
     set_pin(client, world, world.staff_a)
     token = tablet(client, world)
     res = punch(client, token, "4827")
