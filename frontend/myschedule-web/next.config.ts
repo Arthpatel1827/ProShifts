@@ -4,7 +4,8 @@ const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-Frame-Options", value: "DENY" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=()" },
+  // geolocation=(self): Settings → "Use my current location" fills in the store's GPS point.
+  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(self), payment=()" },
   // Clickjacking protection for modern browsers; script/style policy is left to the
   // defaults so Next's inline bootstrap scripts keep working.
   { key: "Content-Security-Policy", value: "frame-ancestors 'none'; base-uri 'self'; object-src 'none'" },

@@ -24,7 +24,11 @@ x-backend: &backend
     JWT_REFRESH_TOKEN_EXPIRES: ${JWT_REFRESH_TOKEN_EXPIRES:-2592000}
     CORS_ORIGINS: ${WEB_ORIGIN:?Set WEB_ORIGIN in .env, e.g. https://app.example.com}
     TRUSTED_PROXY_COUNT: "1"
-    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    # Optional: without these the AI features / clock-in PINs answer 503 and the rest works.
+    NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+    NVIDIA_BASE_URL: ${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
+    NVIDIA_NEMOTRON_MODEL: ${NVIDIA_NEMOTRON_MODEL:-nvidia/nemotron-3-super-120b-a12b}
+    KIOSK_PIN_SECRET: ${KIOSK_PIN_SECRET:-}
     EMAIL_SENDING_ENABLED: ${EMAIL_SENDING_ENABLED:-false}
     MAIL_SERVER: ${MAIL_SERVER:-smtp.gmail.com}
     MAIL_PORT: ${MAIL_PORT:-587}
