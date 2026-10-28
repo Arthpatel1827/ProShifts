@@ -497,7 +497,7 @@ export default function AIAssistantScreen({ navigation }: any) {
                     onContentSizeChange={() =>
                         flatListRef.current?.scrollToEnd({ animated: true })
                     }
-                    ListFooterComponent={isTyping ? <TypingIndicator /> : null}
+                    ListFooterComponent={isTyping ? <TypingIndicator /> : undefined}
                 />
 
                 {/* Quick commands */}

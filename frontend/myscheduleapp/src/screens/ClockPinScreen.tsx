@@ -10,9 +10,9 @@ import { KioskAPI } from '../api/api';
 
 function PinBoxes({ value, onChange, label, autoFocus, inputRef, onDone }: {
     value: string; onChange: (v: string) => void; label: string; autoFocus?: boolean;
-    inputRef?: React.RefObject<TextInput | null>; onDone?: () => void;
+    inputRef?: React.RefObject<React.ComponentRef<typeof TextInput> | null>; onDone?: () => void;
 }) {
-    const local = useRef<TextInput>(null);
+    const local = useRef<React.ComponentRef<typeof TextInput>>(null);
     const ref = inputRef ?? local;
     return (
         <View style={styles.block}>
@@ -50,7 +50,7 @@ export default function ClockPinScreen({ navigation }: any) {
     const [confirm, setConfirm] = useState('');
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const confirmRef = useRef<TextInput>(null);
+    const confirmRef = useRef<React.ComponentRef<typeof TextInput>>(null);
 
     const load = useCallback(async () => {
         try {

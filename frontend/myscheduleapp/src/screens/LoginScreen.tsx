@@ -49,7 +49,7 @@ export default function LoginScreen({ navigation }: any) {
     const [bioType,      setBioType]      = useState<'face' | 'fingerprint' | 'none'>('none');
     const [hasSession,   setHasSession]   = useState(false);
 
-    const passwordRef = useRef<TextInput>(null);
+    const passwordRef = useRef<React.ComponentRef<typeof TextInput>>(null);
 
     // ── Check biometric on mount ──────────────────────────────────────────────
     useEffect(() => {
