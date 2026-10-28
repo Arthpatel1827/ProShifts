@@ -19,3 +19,4 @@ pydantic==2.14.1  # AI request/response schemas (ai/schemas.py)
 pytz==2024.1
 requests==2.31.0
 tzdata==2025.2  # IANA timezone database for zoneinfo (slim images have none)
+gunicorn==23.0.0  # production server: gunicorn -k eventlet -w 1 app:app

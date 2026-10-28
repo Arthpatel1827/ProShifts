@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAccessToken, getRefreshToken, setSessionCookies, clearSessionCookies } from "@/lib/auth/session";
-import { FLASK_URL, refreshAccessToken } from "@/lib/auth/refresh";
+import { FLASK_URL, forwardedHeaders, refreshAccessToken } from "@/lib/auth/refresh";
 
 // Response headers worth passing back to the browser. Everything else (cookies,
 // hop-by-hop headers, Flask's server header) stays on this side.
 const PASS_RESPONSE_HEADERS = ["content-type", "content-disposition", "cache-control", "etag", "last-modified"];
 
 async function callFlask(req: NextRequest, path: string[], body: ArrayBuffer | undefined, token: string | undefined) {
-    const headers = new Headers();
+    const headers = new Headers(forwardedHeaders(req));
     const contentType = req.headers.get("content-type");
     if (contentType) headers.set("Content-Type", contentType); // keeps multipart boundaries intact
     const accept = req.headers.get("accept");
@@ -34,7 +34,7 @@ async function forward(req: NextRequest, path: string[]): Promise<NextResponse> 
 
     // The access cookie expired but the session is still alive: refresh up front.
     if (!accessToken && refreshToken) {
-        accessToken = (await refreshAccessToken(refreshToken)) ?? undefined;
+        accessToken = (await refreshAccessToken(refreshToken, forwardedHeaders(req))) ?? undefined;
         if (accessToken) await setSessionCookies(accessToken);
     }
 
@@ -42,7 +42,7 @@ async function forward(req: NextRequest, path: string[]): Promise<NextResponse> 
     try {
         flaskRes = await callFlask(req, path, body, accessToken);
         if (flaskRes.status === 401 && refreshToken) {
-            const fresh = await refreshAccessToken(refreshToken);
+            const fresh = await refreshAccessToken(refreshToken, forwardedHeaders(req));
             if (fresh) {
                 await setSessionCookies(fresh);
                 flaskRes = await callFlask(req, path, body, fresh); // retry exactly once

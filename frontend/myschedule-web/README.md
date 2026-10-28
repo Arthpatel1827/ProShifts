@@ -18,7 +18,11 @@ npm run dev            # http://localhost:3000
 | Variable | Where it's used |
 | --- | --- |
 | `FLASK_API_URL` | Server-side: where the Next.js routes reach Flask |
-| `NEXT_PUBLIC_SOCKET_URL` | Browser: Socket.IO endpoint for live updates |
+| `NEXT_PUBLIC_SOCKET_URL` | Browser: Socket.IO endpoint. Unset → the page's own origin (the Docker/Caddy setup); set to `http://localhost:5000` for local dev. Baked in at build time |
+| `COOKIE_SECURE` | Session cookies are `Secure` in production; `false` only for a plain-HTTP trial |
+
+In Docker the app runs as a standalone server (`output: "standalone"`) behind Caddy; see
+the root README.
 
 Add the web origin (e.g. `http://localhost:3000`) to the backend's `CORS_ORIGINS` so the
 browser can open its socket.

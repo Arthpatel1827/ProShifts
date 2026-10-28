@@ -45,6 +45,8 @@ class Config:
     # calls per page plus refreshes, so the old 50/hour locked managers out mid-task.
     RATELIMIT_DEFAULT = os.getenv("RATELIMIT_DEFAULT", "3000 per hour;300 per minute")
     RATELIMIT_HEADERS_ENABLED = True
+    # Number of reverse proxies in front of Flask that set X-Forwarded-For (0 = trust none).
+    TRUSTED_PROXY_COUNT = int(os.getenv("TRUSTED_PROXY_COUNT", "0"))
 
     # NVIDIA Nemotron (OpenAI-compatible API). Server-side only — never sent to clients.
     NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")

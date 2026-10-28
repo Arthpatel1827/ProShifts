@@ -2,6 +2,7 @@ from flask import Blueprint
 from flask_jwt_extended import jwt_required
 from controllers.auth_controller import AuthController
 from controllers.password_flow_controller import PasswordFlowController
+from extensions import limiter
 
 # Blueprint for /auth endpoints
 router = Blueprint("auth", __name__, url_prefix="/auth")
@@ -10,11 +11,14 @@ auth = AuthController()
 pwd = PasswordFlowController()
 
 # ---------- AUTH CORE ----------
+# Brute-force targets get their own strict, per-IP limits on top of the default.
 @router.post("/register")
+@limiter.limit("10 per hour")
 def register():
     return auth.register()
 
 @router.post("/login")
+@limiter.limit("10 per minute;60 per hour")
 def login():
     return auth.login()
 
@@ -36,6 +40,7 @@ def logout():
 
 # ---------- PASSWORD FLOWS ----------
 @router.post("/forgot-password")
+@limiter.limit("5 per hour")
 def forgot_password():
     return pwd.forgot_password()
 
@@ -46,6 +51,7 @@ def forgot_password_confirm_page():
 
 # API to submit new password (JSON or form)
 @router.post("/forgot-password/confirm")
+@limiter.limit("10 per hour")  # 6-digit codes: keep guessing impractical
 def forgot_password_confirm():
     return pwd.forgot_password_confirm()
 

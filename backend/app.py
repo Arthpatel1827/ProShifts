@@ -33,6 +33,14 @@ def create_app():
         if os.getenv("CORS_ORIGINS", "*").strip() == "*":
             raise RuntimeError("CORS_ORIGINS must list your web app origin(s) in production, not '*'")
 
+    # Behind Caddy/nginx (and the Next.js proxy) the socket peer is the proxy, not the
+    # user. Trust X-Forwarded-* only from the configured number of proxy hops, so rate
+    # limits and logs see the real client IP without letting clients spoof it.
+    proxy_hops = app.config.get("TRUSTED_PROXY_COUNT", 0)
+    if proxy_hops > 0:
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=proxy_hops, x_proto=proxy_hops, x_host=proxy_hops)
+
     init_extensions(app)
 
     # Clock-in PINs need their own key. Missing → PIN features answer 503 with what to set;
@@ -121,13 +129,21 @@ def create_app():
 
     @app.get("/health")
     def health():
-        from extensions import redis_client
-        redis_ok = False
+        """Readiness: 200 only when PostgreSQL and Redis both answer (used by Docker/LBs)."""
+        from extensions import db, redis_client
+        from sqlalchemy import text
+        checks = {"database": False, "redis": False}
         try:
-            redis_ok = redis_client.ping() if redis_client else False
+            db.session.execute(text("SELECT 1"))
+            checks["database"] = True
+        except Exception:
+            db.session.rollback()
+        try:
+            checks["redis"] = bool(redis_client and redis_client.ping())
         except Exception:
             pass
-        return jsonify({"status": "ok", "redis": redis_ok}), 200
+        healthy = all(checks.values())
+        return jsonify({"status": "ok" if healthy else "degraded", **checks}), 200 if healthy else 503
 
     # `flask db …` commands must let Alembic own the schema: creating tables here first
     # makes the initial migration fail with "relation already exists" on a fresh database.
@@ -136,7 +152,10 @@ def create_app():
     argv0 = sys.argv[0].replace("\\", "/")
     is_flask_cli = os.path.basename(argv0).startswith("flask") or argv0.endswith("flask/__main__.py")
     running_migrations = is_flask_cli and "db" in sys.argv[1:4]
-    if not running_migrations:
+    # Production schema changes go through Alembic only (see the `migrate` service in
+    # docker-compose.yml); set AUTO_CREATE_TABLES=false there. Dev keeps the old behaviour.
+    auto_create = os.getenv("AUTO_CREATE_TABLES", "true").lower() == "true"
+    if auto_create and not running_migrations:
         with app.app_context():
             from extensions import db
             from sqlalchemy import text

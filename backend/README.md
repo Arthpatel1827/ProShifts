@@ -21,7 +21,16 @@ python app.py                                        # http://localhost:5000
 ```
 
 Run the server with `python app.py`, not `flask run`: the entrypoint applies the eventlet
-monkey-patch that Socket.IO needs to talk to Redis.
+monkey-patch that Socket.IO needs to talk to Redis. In production (and in Docker) use
+gunicorn, whose eventlet worker patches for you:
+
+```bash
+gunicorn --worker-class eventlet --workers 1 --bind 0.0.0.0:5000 app:app
+celery -A workers.celery_app:celery worker --loglevel=info     # AI jobs
+```
+
+For the full stack (PostgreSQL, Redis, API, worker, web app, HTTPS) see the root
+README's Docker section.
 
 ### Configuration
 
@@ -29,6 +38,12 @@ All settings come from environment variables (see `.env.example`). In production
 (`FLASK_ENV=production`) the app refuses to start unless `JWT_SECRET_KEY` is a random
 value of at least 32 characters and `CORS_ORIGINS` lists your web origin(s) rather than `*`.
 Native mobile clients are allowed to open sockets regardless of `CORS_ORIGINS`.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `TRUSTED_PROXY_COUNT` | `0` | Proxy hops allowed to set `X-Forwarded-For`. Set to `1` behind Caddy/nginx; leave `0` if Flask is exposed directly, or clients could spoof their IP |
+| `RATELIMIT_DEFAULT` | `3000 per hour;300 per minute` | Per signed-in user, or per IP when anonymous |
+| `AUTO_CREATE_TABLES` | `true` | Run `db.create_all()` at startup. `false` in Docker, where migrations own the schema |
 
 ### Timezones
 
