@@ -4,7 +4,7 @@ Integration tests run against a real PostgreSQL database (the schema uses CITEXT
 JSON columns) and Redis (JWT blocklist). Point them at throwaway instances:
 
     export TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:5432/myschedule_test
-    export TEST_REDIS_URL=redis://localhost:6379/15
+    export TEST_REDIS_URL=redis://127.0.0.1:6379/15
     pytest
 
 Every table is truncated between tests, so never point TEST_DATABASE_URL at real data.
@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta
 import pytest
 
 TEST_DB = os.getenv("TEST_DATABASE_URL")
-TEST_REDIS = os.getenv("TEST_REDIS_URL", "redis://localhost:6379/15")
+TEST_REDIS = os.getenv("TEST_REDIS_URL", "redis://127.0.0.1:6379/15")
 
 if not TEST_DB:
     pytest.skip("TEST_DATABASE_URL is not set — skipping integration tests", allow_module_level=True)

@@ -122,7 +122,7 @@ truncated between tests.
 ```bash
 createdb myschedule_test
 TEST_DATABASE_URL=postgresql://postgres@localhost:5432/myschedule_test \
-TEST_REDIS_URL=redis://localhost:6379/15 \
+TEST_REDIS_URL=redis://127.0.0.1:6379/15 \
 python -m pytest
 ```
 

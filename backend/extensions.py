@@ -75,7 +75,7 @@ def init_extensions(app):
     )
 
     redis_client = redis_lib.from_url(
-        app.config.get("REDIS_URL", "redis://localhost:6379/0"),
+        app.config.get("REDIS_URL", "redis://127.0.0.1:6379/0"),
         decode_responses=True,
     )
 

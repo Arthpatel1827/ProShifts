@@ -29,9 +29,12 @@ class Config:
         seconds=int(os.getenv("JWT_REFRESH_TOKEN_EXPIRES", "2592000"))
     )
 
-    REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/1")
-    CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/2")
+    # 127.0.0.1, not "localhost": under eventlet, host names go through eventlet's own DNS
+    # resolver, and Windows doesn't list localhost in its hosts file, so "localhost" can
+    # fail with "No address found" (error 11001) even while Redis is running.
+    REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+    CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://127.0.0.1:6379/1")
+    CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://127.0.0.1:6379/2")
     CELERY_TASK_SERIALIZER = "json"
     CELERY_RESULT_SERIALIZER = "json"
     CELERY_ACCEPT_CONTENT = ["json"]
@@ -39,8 +42,8 @@ class Config:
 
     # Redis pub/sub so several API processes (and Celery) share socket events. Set
     # SOCKETIO_MESSAGE_QUEUE to an empty value for a single process (the tests do).
-    SOCKETIO_MESSAGE_QUEUE = os.getenv("SOCKETIO_MESSAGE_QUEUE", os.getenv("REDIS_URL", "redis://localhost:6379/0")) or None
-    RATELIMIT_STORAGE_URI = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    SOCKETIO_MESSAGE_QUEUE = os.getenv("SOCKETIO_MESSAGE_QUEUE", os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")) or None
+    RATELIMIT_STORAGE_URI = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
     # Per signed-in user (or per IP when anonymous). The schedule and dashboard make ~10
     # calls per page plus refreshes, so the old 50/hour locked managers out mid-task.
     RATELIMIT_DEFAULT = os.getenv("RATELIMIT_DEFAULT", "3000 per hour;300 per minute")
