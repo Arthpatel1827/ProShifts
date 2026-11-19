@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
-import { AuthAPI } from '../api/api';
+import { AuthAPI, describeApiError } from '../api/api';
 
 export default function ResetPasswordScreen({ navigation, route }: any) {
     const [newPassword, setNewPassword] = useState('');
@@ -24,7 +24,7 @@ export default function ResetPasswordScreen({ navigation, route }: any) {
             await AuthAPI.resetPassword(token, newPassword, confirmPassword);
             navigation.navigate('PasswordChanged');
         } catch (e: any) {
-            setError(e?.response?.data?.error || 'Reset failed');
+            setError(describeApiError(e, 'Reset failed'));
         } finally {
             setLoading(false);
         }

@@ -2,6 +2,7 @@
 import axios from 'axios';
 import { API_BASE_URL } from '../config/env';
 import { getAccessToken, getRefreshToken, setTokens, clearTokens } from '../utils/secureStore';
+export { describeApiError } from '../utils/apiError';
 
 // ── Axios instance ─────────────────────────────────────────────────────────────
 export const api = axios.create({ baseURL: API_BASE_URL, timeout: 15000 });
@@ -295,24 +296,31 @@ export const AvailabilityAPI = {
 };
 
 // ── AI API ─────────────────────────────────────────────────────────────────────
+// One assistant answer is usually two or three model calls (ask → look up the schedule →
+// answer), and the server allows each of them up to NVIDIA_TIMEOUT_SECONDS (60s by
+// default). The app-wide 15s timeout cut these requests off while the server was still
+// working, so AI calls get their own, longer one.
+export const AI_REQUEST_TIMEOUT_MS = 120000;
+const aiOpts = { timeout: AI_REQUEST_TIMEOUT_MS };
+
 export const AIAPI = {
     chat: (body: {
         message: string;
         location_id: number;
         history?: { role: string; content: string }[];
-    }) => api.post('/ai/chat', body),
+    }) => api.post('/ai/chat', body, aiOpts),
 
     generateSchedule: (location_id: number, week_start: string) =>
-        api.post('/ai/generate-schedule', { location_id, week_start }),
+        api.post('/ai/generate-schedule', { location_id, week_start }, aiOpts),
 
     jobStatus: (job_id: string) =>
         api.get(`/ai/job/${job_id}`),
 
     predictStaffing: (location_id: number, week_start: string) =>
-        api.post('/ai/predict-staffing', { location_id, week_start }),
+        api.post('/ai/predict-staffing', { location_id, week_start }, aiOpts),
 
     swapRecommendations: (swap_id: number, location_id: number) =>
-        api.post('/ai/swap-recommendations', { swap_id, location_id }),
+        api.post('/ai/swap-recommendations', { swap_id, location_id }, aiOpts),
 };
 
 // ── Time Entry API ─────────────────────────────────────────────────────────────

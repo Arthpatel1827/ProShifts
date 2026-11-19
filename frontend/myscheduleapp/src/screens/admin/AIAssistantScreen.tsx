@@ -22,7 +22,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons }     from '@expo/vector-icons';
 import { colors }       from '../../theme/colors';
-import { AIAPI, AdminAPI } from '../../api/api';
+import { AIAPI, AdminAPI, describeApiError } from '../../api/api';
 import { AuthContext }  from '../../context/AuthContext';
 import { useQuery }     from '@apollo/client/react';
 import { MY_LOCATIONS_QUERY } from '../../graphql/operations';
@@ -308,11 +308,11 @@ export default function AIAssistantScreen({ navigation }: any) {
             };
 
             setMessages(prev => [...prev, assistantMsg]);
-        } catch {
+        } catch (e: any) {
             setMessages(prev => [...prev, {
                 id:        uid(),
                 role:      'assistant',
-                content:   'Sorry, I ran into an error. Please try again.',
+                content:   `Sorry, I couldn't answer that. ${describeApiError(e, 'Please try again.')}`,
                 timestamp: new Date(),
             }]);
         } finally {

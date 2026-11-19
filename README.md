@@ -27,9 +27,26 @@ docker compose up -d --build
 
 With the example settings, the web app is on http://localhost and the API (for the mobile
 app) on http://localhost:8080. Point the mobile app at it with
-`EXPO_PUBLIC_API_URL=http://<your-computer's-LAN-IP>:8080` in `frontend/myscheduleapp/.env`.
+`EXPO_PUBLIC_API_URL=http://<your-computer's-LAN-IP>:8080` in `frontend/myscheduleapp/.env.local`
+(git-ignored), then restart Expo with `npx expo start -c`.
 
 The first owner account is created from the mobile app's sign-up flow.
+
+**Password-reset codes and email.** Email is off by default (`EMAIL_SENDING_ENABLED=false`),
+so nothing can be mailed. Until you set `EMAIL_SENDING_ENABLED=true` and the `MAIL_*` values in
+`.env`, the 6-digit reset code (and email-verification links) are written to the API log
+instead. The app still answers "if that email exists, a code has been sent". Read the code with:
+
+```bash
+docker compose logs --tail 50 api | grep "Password reset OTP"       # PowerShell: ... | Select-String "Password reset OTP"
+```
+
+Anyone who can read the API log can see those codes, so turn email on before real use. After
+editing `.env`, apply it with `docker compose up -d`.
+
+**AI assistant.** Put your NVIDIA key in `.env` as `NVIDIA_API_KEY=` (key from
+[build.nvidia.com](https://build.nvidia.com)) and run `docker compose up -d`. Without it the AI
+screens say "AI isn't configured on this server". AI answers can take 10–60 s.
 
 ## Deploying to a server
 

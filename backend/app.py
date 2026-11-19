@@ -20,6 +20,36 @@ from extensions import init_extensions, socketio
 import models  # noqa: F401 — needed for Flask-Migrate
 
 
+def _configure_logging(app):
+    """Make INFO log lines visible under gunicorn/Docker.
+
+    Nothing else configures logging, so Python's default (WARNING) silently dropped the
+    app logger and every proshifts.* logger — including the "[DEV] Password reset OTP"
+    line that is the only way to get a reset code when email isn't configured. One handler
+    on the "proshifts" parent covers proshifts.ai / .audit / .config (no duplicates); the
+    Flask app logger already has its own handler and only needs the level.
+    Level comes from LOG_LEVEL (default INFO); AI_LOG_LEVEL still overrides proshifts.ai.
+    Other lines carry feature/outcome only — never keys, PINs, passwords or tokens. The one
+    deliberate exception is the reset code / verification link, logged only while email
+    sending is disabled (startup says so), because there is no other way to deliver it.
+    """
+    import logging
+
+    def _level(name, default="INFO"):
+        value = getattr(logging, os.getenv(name, default).strip().upper(), None)
+        return value if isinstance(value, int) else getattr(logging, default)
+
+    parent = logging.getLogger("proshifts")
+    if not parent.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        parent.addHandler(handler)
+    parent.setLevel(_level("LOG_LEVEL"))
+    app.logger.setLevel(_level("LOG_LEVEL"))
+    if os.getenv("AI_LOG_LEVEL"):
+        logging.getLogger("proshifts.ai").setLevel(_level("AI_LOG_LEVEL"))
+
+
 def create_app():
     app = Flask(__name__)
     app.config.from_object(
@@ -42,6 +72,7 @@ def create_app():
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=proxy_hops, x_proto=proxy_hops, x_host=proxy_hops)
 
     init_extensions(app)
+    _configure_logging(app)
 
     # Clock-in PINs need their own key. Missing → PIN features answer 503 with what to set;
     # the rest of the app works. The value itself is never logged.
@@ -53,15 +84,15 @@ def create_app():
             _logging.getLogger("proshifts.config").warning(
                 "Personal clock-in PINs are disabled: %s. Set it in backend/.env.", problem)
 
-    # AI request logs (feature, model, latency, outcome — never keys or prompts). Nothing
-    # else configures logging, so without a handler these INFO lines would be dropped.
-    import logging
-    ai_log = logging.getLogger("proshifts.ai")
-    if not ai_log.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
-        ai_log.addHandler(handler)
-        ai_log.setLevel(os.getenv("AI_LOG_LEVEL", "INFO").upper())
+        # Without SMTP the app can't email anything. Say so at startup, because the
+        # password-reset code and email-verification link are then written to this log
+        # instead (the user still gets the generic "if the account exists…" answer).
+        if not app.config.get("EMAIL_SENDING_ENABLED"):
+            import logging as _logging
+            _logging.getLogger("proshifts.config").warning(
+                "Email sending is disabled (EMAIL_SENDING_ENABLED is not true): password-reset "
+                "codes and verification links are written to this server log instead of being "
+                "emailed. Set EMAIL_SENDING_ENABLED=true and the MAIL_* values for real use.")
 
     origins =[o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
     CORS(app, resources={r"/*": {"origins": "*" if origins == ["*"] else origins}})
