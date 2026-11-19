@@ -204,7 +204,7 @@ export default function LoginScreen({ navigation }: any) {
                         {/* Forgot password */}
                         <Pressable
                             style={styles.forgotBtn}
-                            onPress={() => navigation.navigate('ForgotPassword')}
+                            onPress={() => navigation.navigate('ForgotPasswordRequest')}
                         >
                             <Text style={styles.forgotText}>Forgot password?</Text>
                         </Pressable>
@@ -257,7 +257,7 @@ export default function LoginScreen({ navigation }: any) {
                     {/* Register */}
                     <View style={styles.registerRow}>
                         <Text style={styles.registerText}>Don't have an account? </Text>
-                        <Pressable onPress={() => navigation.navigate('Register')}>
+                        <Pressable onPress={() => navigation.navigate('OwnerSignup')}>
                             <Text style={styles.registerLink}>Create one</Text>
                         </Pressable>
                     </View>
