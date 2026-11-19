@@ -84,3 +84,58 @@ def test_time_off_pending_includes_employee_name(client, world):
     # owner_b is an owner, but of a different company.
     rid = pending[0]["request_id"]
     assert client.post(f"/time-off/{rid}/decide", headers=world.headers(world.owner_b), json={"approve": True}).status_code == 403
+
+
+def test_rate_limits_are_per_user_not_per_server_ip(app, world):
+    # Every web request reaches Flask from the Next.js server's one IP; keying limits by
+    # IP made all managers share a single bucket.
+    from extensions import rate_limit_key
+    with app.test_request_context("/shifts/", headers=world.headers(world.manager_a), environ_base={"REMOTE_ADDR": "10.0.0.5"}):
+        assert rate_limit_key() == f"user:{world.manager_a}"
+    with app.test_request_context("/shifts/", headers=world.headers(world.owner_b), environ_base={"REMOTE_ADDR": "10.0.0.5"}):
+        assert rate_limit_key() == f"user:{world.owner_b}"
+    with app.test_request_context("/auth/login", environ_base={"REMOTE_ADDR": "10.0.0.5"}):
+        assert rate_limit_key() == "10.0.0.5"
+
+
+def test_only_owners_and_managers_change_clock_in_rules(app, client, world):
+    from models import Company
+    url = "/time-entries/settings"
+    # Staff could previously switch GPS off or mint the daily PIN and clock in from anywhere.
+    assert client.put(url, headers=world.headers(world.staff_a), json={"clock_in_method": "manager_only"}).status_code == 403
+    assert client.post(url + "/generate-pin", headers=world.headers(world.staff_a)).status_code == 403
+    with app.app_context():
+        assert Company.query.get(world.comp_a).clock_in_method == "gps"
+        assert Company.query.get(world.comp_a).clock_in_pin is None
+
+    res = client.put(url, headers=world.headers(world.manager_a), json={"clock_in_method": "qr_pin"})
+    assert res.status_code == 200 and res.get_json()["settings"]["clock_in_method"] == "qr_pin"
+    pin = client.post(url + "/generate-pin", headers=world.headers(world.owner_a))
+    assert pin.status_code == 200 and len(pin.get_json()["pin"]) == 4
+    # Another company's owner changes their own company, never this one.
+    client.put(url, headers=world.headers(world.owner_b), json={"clock_in_method": "manager_only"})
+    with app.app_context():
+        assert Company.query.get(world.comp_a).clock_in_method == "qr_pin"
+        assert Company.query.get(world.comp_b).clock_in_method == "manager_only"
+
+
+def test_settings_report_pin_expiry_but_never_the_pin(app, client, world):
+    url = "/time-entries/settings"
+    assert client.get(url, headers=world.headers(world.manager_a)).get_json()["settings"]["pin_expires_at"] is None
+    pin = client.post(url + "/generate-pin", headers=world.headers(world.manager_a)).get_json()["pin"]
+    s = client.get(url, headers=world.headers(world.staff_a)).get_json()["settings"]
+    assert s["pin_expires_at"] and pin not in str(s)
+
+
+def test_clock_in_is_rate_limited_against_pin_guessing(app, client, world):
+    from extensions import limiter
+    client.put("/time-entries/settings", headers=world.headers(world.manager_a), json={"clock_in_method": "qr_pin"})
+    client.post("/time-entries/settings/generate-pin", headers=world.headers(world.manager_a))
+    limiter.enabled = True
+    try:
+        limiter.reset()
+        codes = [client.post("/time-entries/clock-in", headers=world.headers(world.staff_a),
+                             json={"pin": f"{n:04d}"}).status_code for n in range(12)]
+    finally:
+        limiter.enabled = False
+    assert codes[:10] == [400] * 10 and codes[10:] == [429, 429]

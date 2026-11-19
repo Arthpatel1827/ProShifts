@@ -3,6 +3,7 @@ from datetime import datetime
 from extensions import db
 from models import ShiftDrop, ShiftAssignment, Shift, Employment, AppUser
 from services.notification_service import NotificationService
+from utils import timezones as tzu
 
 notif_svc = NotificationService()
 
@@ -64,7 +65,7 @@ class DropService:
             title=f"Drop Request {status_word.capitalize()}",
             body=(
                 f"Your request to drop the shift on "
-                f"{shift.start_time.strftime('%b %d at %I:%M %p')} "
+                f"{tzu.shift_local_str(shift)} "
                 f"was {status_word}."
             ),
             data={"drop_id": drop_id, "shift_id": drop.shift_id},
@@ -146,7 +147,7 @@ class DropService:
                 title="Shift Drop Request",
                 body=(
                     f"{name} wants to drop their shift on "
-                    f"{shift.start_time.strftime('%b %d at %I:%M %p')}. "
+                    f"{tzu.shift_local_str(shift)}. "
                     f"Tap to review."
                 ),
                 data={"drop_id": drop.drop_id, "shift_id": shift.shift_id},

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
-import { AuthAPI } from '../api/api';
+import { AuthAPI, describeApiError } from '../api/api';
 
 export default function ForgotPasswordRequestScreen({ navigation }: any) {
     const [email, setEmail] = useState('');
@@ -19,7 +19,7 @@ export default function ForgotPasswordRequestScreen({ navigation }: any) {
             await AuthAPI.forgotPassword(trimmed);
             navigation.navigate('Otp', { email: trimmed });
         } catch (e: any) {
-            setError(e?.response?.data?.error || 'Failed to send reset link');
+            setError(describeApiError(e, 'Failed to send the reset code.'));
         } finally {
             setLoading(false);
         }

@@ -20,6 +20,36 @@ from extensions import init_extensions, socketio
 import models  # noqa: F401 — needed for Flask-Migrate
 
 
+def _configure_logging(app):
+    """Make INFO log lines visible under gunicorn/Docker.
+
+    Nothing else configures logging, so Python's default (WARNING) silently dropped the
+    app logger and every proshifts.* logger — including the "[DEV] Password reset OTP"
+    line that is the only way to get a reset code when email isn't configured. One handler
+    on the "proshifts" parent covers proshifts.ai / .audit / .config (no duplicates); the
+    Flask app logger already has its own handler and only needs the level.
+    Level comes from LOG_LEVEL (default INFO); AI_LOG_LEVEL still overrides proshifts.ai.
+    Other lines carry feature/outcome only — never keys, PINs, passwords or tokens. The one
+    deliberate exception is the reset code / verification link, logged only while email
+    sending is disabled (startup says so), because there is no other way to deliver it.
+    """
+    import logging
+
+    def _level(name, default="INFO"):
+        value = getattr(logging, os.getenv(name, default).strip().upper(), None)
+        return value if isinstance(value, int) else getattr(logging, default)
+
+    parent = logging.getLogger("proshifts")
+    if not parent.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+        parent.addHandler(handler)
+    parent.setLevel(_level("LOG_LEVEL"))
+    app.logger.setLevel(_level("LOG_LEVEL"))
+    if os.getenv("AI_LOG_LEVEL"):
+        logging.getLogger("proshifts.ai").setLevel(_level("AI_LOG_LEVEL"))
+
+
 def create_app():
     app = Flask(__name__)
     app.config.from_object(
@@ -33,9 +63,38 @@ def create_app():
         if os.getenv("CORS_ORIGINS", "*").strip() == "*":
             raise RuntimeError("CORS_ORIGINS must list your web app origin(s) in production, not '*'")
 
-    init_extensions(app)
+    # Behind Caddy/nginx (and the Next.js proxy) the socket peer is the proxy, not the
+    # user. Trust X-Forwarded-* only from the configured number of proxy hops, so rate
+    # limits and logs see the real client IP without letting clients spoof it.
+    proxy_hops = app.config.get("TRUSTED_PROXY_COUNT", 0)
+    if proxy_hops > 0:
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=proxy_hops, x_proto=proxy_hops, x_host=proxy_hops)
 
-    origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
+    init_extensions(app)
+    _configure_logging(app)
+
+    # Clock-in PINs need their own key. Missing → PIN features answer 503 with what to set;
+    # the rest of the app works. The value itself is never logged.
+    with app.app_context():
+        from services.kiosk_service import kiosk_secret_problem
+        problem = kiosk_secret_problem(app.config.get("KIOSK_PIN_SECRET"))
+        if problem:
+            import logging as _logging
+            _logging.getLogger("proshifts.config").warning(
+                "Personal clock-in PINs are disabled: %s. Set it in backend/.env.", problem)
+
+        # Without SMTP the app can't email anything. Say so at startup, because the
+        # password-reset code and email-verification link are then written to this log
+        # instead (the user still gets the generic "if the account exists…" answer).
+        if not app.config.get("EMAIL_SENDING_ENABLED"):
+            import logging as _logging
+            _logging.getLogger("proshifts.config").warning(
+                "Email sending is disabled (EMAIL_SENDING_ENABLED is not true): password-reset "
+                "codes and verification links are written to this server log instead of being "
+                "emailed. Set EMAIL_SENDING_ENABLED=true and the MAIL_* values for real use.")
+
+    origins =[o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
     CORS(app, resources={r"/*": {"origins": "*" if origins == ["*"] else origins}})
 
     # REST Blueprints
@@ -52,6 +111,7 @@ def create_app():
     from routes.drops         import drops_bp
     from routes.time_off import time_off_bp
     from routes.messaging import messaging_bp
+    from routes.kiosk import router as kiosk_router
     
     app.register_blueprint(auth_router)
     app.register_blueprint(onboarding_router)
@@ -66,6 +126,7 @@ def create_app():
     app.register_blueprint(drops_bp)
     app.register_blueprint(time_off_bp)
     app.register_blueprint(messaging_bp)
+    app.register_blueprint(kiosk_router)
     
     # GraphQL
     from gql_server.graphql_server import register_graphql_route
@@ -95,23 +156,37 @@ def create_app():
 
     @app.get("/")
     def root():
-        return jsonify({"message": "Work Scheduler API 🚀", "version": "2.0.0"})
+        return jsonify({"message": "ProShifts API 🚀", "version": "2.0.0"})
 
     @app.get("/health")
     def health():
-        from extensions import redis_client
-        redis_ok = False
+        """Readiness: 200 only when PostgreSQL and Redis both answer (used by Docker/LBs)."""
+        from extensions import db, redis_client
+        from sqlalchemy import text
+        checks = {"database": False, "redis": False}
         try:
-            redis_ok = redis_client.ping() if redis_client else False
+            db.session.execute(text("SELECT 1"))
+            checks["database"] = True
+        except Exception:
+            db.session.rollback()
+        try:
+            checks["redis"] = bool(redis_client and redis_client.ping())
         except Exception:
             pass
-        return jsonify({"status": "ok", "redis": redis_ok}), 200
+        healthy = all(checks.values())
+        return jsonify({"status": "ok" if healthy else "degraded", **checks}), 200 if healthy else 503
 
     # `flask db …` commands must let Alembic own the schema: creating tables here first
     # makes the initial migration fail with "relation already exists" on a fresh database.
     # Matches both `flask db upgrade` and `flask --app app.py db upgrade`.
-    running_migrations = os.path.basename(sys.argv[0]).startswith("flask") and "db" in sys.argv[1:4]
-    if not running_migrations:
+    # `python -m flask db …` (what Windows needs) runs flask/__main__.py, so check the path too.
+    argv0 = sys.argv[0].replace("\\", "/")
+    is_flask_cli = os.path.basename(argv0).startswith("flask") or argv0.endswith("flask/__main__.py")
+    running_migrations = is_flask_cli and "db" in sys.argv[1:4]
+    # Production schema changes go through Alembic only (see the `migrate` service in
+    # docker-compose.yml); set AUTO_CREATE_TABLES=false there. Dev keeps the old behaviour.
+    auto_create = os.getenv("AUTO_CREATE_TABLES", "true").lower() == "true"
+    if auto_create and not running_migrations:
         with app.app_context():
             from extensions import db
             from sqlalchemy import text

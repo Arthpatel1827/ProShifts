@@ -1,16 +1,24 @@
 import { api, qs } from "./client";
-import type { DropRequest, ShiftConflict, SwapRequest, TimeOffRequest } from "@/lib/types";
+import type { DropRequest, ShiftConflict, SwapRequest, SwapValidation, TimeOffRequest } from "@/lib/types";
 
 export async function listPendingSwaps(locationId: number): Promise<SwapRequest[]> {
     const res = await api.get<{ swaps: SwapRequest[] }>(`/swaps/pending-manager${qs({ location_id: locationId })}`);
     return res.swaps;
 }
 
+/** Approval re-checks the resulting schedule on the server. A hard conflict is refused
+ *  (409 SWAP_CONFLICT); availability alone is refused with OUTSIDE_AVAILABILITY until the
+ *  manager confirms with allowOutsideAvailability. */
 export async function decideSwap(
     swapId: number,
-    approve: boolean
-): Promise<{ swap: SwapRequest; conflicts: { requester: ShiftConflict[]; receiver: ShiftConflict[] } }> {
-    return api.post(`/swaps/${swapId}/decide`, { approve });
+    approve: boolean,
+    allowOutsideAvailability = false
+): Promise<{
+    swap: SwapRequest;
+    conflicts: { requester: ShiftConflict[]; receiver: ShiftConflict[] };
+    validation: SwapValidation | null;
+}> {
+    return api.post(`/swaps/${swapId}/decide`, { approve, allow_outside_availability: allowOutsideAvailability });
 }
 
 export async function listPendingDrops(locationId: number): Promise<DropRequest[]> {

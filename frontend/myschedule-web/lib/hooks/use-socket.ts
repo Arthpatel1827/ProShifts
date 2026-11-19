@@ -7,7 +7,12 @@ import { io, type Socket } from "socket.io-client";
 // The Flask server authenticates the handshake with the JWT access token
 // (routes/sockets.py), so we fetch it from /api/auth/socket-token on each (re)connect.
 
-const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL ?? "http://localhost:5000";
+// Behind the reverse proxy (docker-compose / Caddy) Socket.IO is served from the same
+// origin as the app, so the default is the page's own origin. Local dev without the
+// proxy sets NEXT_PUBLIC_SOCKET_URL=http://localhost:5000.
+function socketUrl(): string {
+    return process.env.NEXT_PUBLIC_SOCKET_URL || window.location.origin;
+}
 
 let socket: Socket | null = null;
 // Reference counts, so two components watching the same room don't leave it for each other.
@@ -40,7 +45,7 @@ async function fetchToken(): Promise<string | null> {
 
 function getSocket(): Socket {
     if (socket) return socket;
-    socket = io(SOCKET_URL, {
+    socket = io(socketUrl(), {
         // Called on every connection attempt, so reconnects pick up a refreshed token.
         auth: (cb) => {
             void fetchToken().then((token) => cb({ token: token ?? "" }));

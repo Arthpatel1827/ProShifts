@@ -16,6 +16,33 @@ export type ShiftConflict = {
     role: string | null;
 };
 
+export type PlacementIssue = { code: string; message: string; shift_id?: number };
+
+/** One person's side of a swap, checked against their schedule AFTER the swap. */
+export type SwapSide = {
+    user_id: number;
+    name: string | null;
+    ok: boolean;
+    errors: PlacementIssue[];
+    availability: string | null;
+    warnings: PlacementIssue[];
+    week_hours_after: number | null;
+    gives: RequestShift | null;
+    receives: RequestShift | null;
+};
+
+/** Resulting-schedule validation, recalculated by the server whenever it's asked. */
+export type SwapValidation = {
+    ok: boolean;
+    /** Only availability is in the way; a manager may approve anyway. */
+    needs_override: boolean;
+    errors: string[];
+    availability: string[];
+    warnings: string[];
+    requester: SwapSide | null;
+    receiver: SwapSide | null;
+};
+
 /** GET /swaps/pending-manager (serialized with include_conflicts) */
 export type SwapRequest = {
     swap_id: number;
@@ -30,6 +57,7 @@ export type SwapRequest = {
     shift: RequestShift | null;
     offered_shift: RequestShift | null;
     conflicts?: { requester: ShiftConflict[]; receiver: ShiftConflict[] };
+    validation?: SwapValidation;
 };
 
 /** GET /drops/pending */

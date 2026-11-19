@@ -67,7 +67,8 @@ type ClockState =
     | 'idle'          // not clocked in
     | 'working'       // clocked in, working
     | 'on_break'      // clocked in, on break
-    | 'manager_only'; // clock-in managed by manager
+    | 'manager_only'  // clock-in managed by manager
+    | 'kiosk';        // clock in on the store's punch-in tablet
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -131,7 +132,8 @@ export default function ClockInScreen({ navigation }: any) {
 
             if (!entry) {
                 setClockState(
-                    s.clock_in_method === 'manager_only' ? 'manager_only' : 'idle'
+                    s.clock_in_method === 'manager_only' ? 'manager_only'
+                        : s.clock_in_method === 'kiosk_pin' ? 'kiosk' : 'idle'
                 );
             } else if (entry.is_on_break) {
                 setClockState('on_break');
@@ -358,6 +360,22 @@ export default function ClockInScreen({ navigation }: any) {
                             Your company uses manager-controlled clock-in.{'\n'}
                             Please ask your manager to clock you in.
                         </Text>
+                    </View>
+                )}
+
+                {/* ── Tablet + personal PIN ── */}
+                {clockState === 'kiosk' && (
+                    <View style={styles.centerBox}>
+                        <View style={styles.methodIconWrap}>
+                            <Ionicons name="tablet-portrait-outline" size={40} color={colors.primary} />
+                        </View>
+                        <Text style={styles.methodTitle}>Punch In at Work</Text>
+                        <Text style={styles.methodSubtitle}>
+                            Clock in on the store's ProShifts tablet with your personal PIN.
+                        </Text>
+                        <Pressable onPress={() => navigation.navigate('ClockPin')} style={{ marginTop: 14 }}>
+                            <Text style={{ color: colors.primary, fontWeight: '700' }}>Set or change my PIN</Text>
+                        </Pressable>
                     </View>
                 )}
 

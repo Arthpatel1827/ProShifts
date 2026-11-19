@@ -1,4 +1,5 @@
 # controllers/time_entry_controller.py
+from extensions import db
 from flask import request, jsonify
 from flask_jwt_extended import get_jwt_identity
 from services.time_entry_service import TimeEntryService
@@ -137,6 +138,8 @@ class TimeEntryController:
                 "message": "Clock settings updated",
                 "settings": svc.get_clock_settings(manager_id),
             }), 200
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
 
@@ -149,11 +152,13 @@ class TimeEntryController:
                 "pin":     pin,
                 "expires": "24 hours",
             }), 200
+        except PermissionError as e:
+            return jsonify({"error": str(e)}), 403
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         
     def get_team_status(self):
-        from datetime import datetime, timezone, timedelta
+        from datetime import timezone, timedelta
         from models import Shift, ShiftAssignment, Employment, AppUser, TimeEntry
 
         user_id     = int(get_jwt_identity())
@@ -167,9 +172,15 @@ class TimeEntryController:
         if not location_employment(user_id, location_id):
             return jsonify({"error": "Forbidden"}), 403
 
-        now   = datetime.now(timezone.utc)
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        end   = start + timedelta(days=1)
+        from models import Location
+        from utils import timezones as tzu
+
+        # "Today" is the location's local calendar day — not UTC midnight to midnight.
+        location = Location.query.get(location_id)
+        tz       = tzu.location_tz(location)
+        now      = tzu.utc_now()
+        today    = tzu.local_today(tz)
+        start, end = tzu.day_bounds(tz, today)
 
         # All active employees at this location
         emps = Employment.query.filter_by(
@@ -185,18 +196,26 @@ class TimeEntryController:
 
             user = emp.user
 
-            # ✅ Find today's shift — SKIP if no shift today
-            today_shift = (
+            # Today's shifts: those starting on the local date, plus an overnight shift
+            # from yesterday that is still running (e.g. 11 PM → 3 AM, checked at 1 AM).
+            candidates = (
                 Shift.query
                 .join(ShiftAssignment, ShiftAssignment.shift_id == Shift.shift_id)
                 .filter(
                     ShiftAssignment.user_id == user.user_id,
                     Shift.location_id       == location_id,
                     Shift.status            == "published",
-                    Shift.start_time        >= start,
                     Shift.start_time        <  end,
+                    db.or_(Shift.start_time >= start, Shift.end_time > now),
                 )
-                .first()
+                .order_by(Shift.start_time.asc())
+                .all()
+            )
+            # Prefer the shift in progress, then the next one today, then the last one.
+            today_shift = (
+                next((s for s in candidates if tzu.as_aware_utc(s.start_time) <= now < tzu.as_aware_utc(s.end_time)), None)
+                or next((s for s in candidates if tzu.as_aware_utc(s.start_time) > now), None)
+                or (candidates[-1] if candidates else None)
             )
 
             # ✅ Only include employees with a shift today
@@ -237,4 +256,69 @@ class TimeEntryController:
         ORDER = {"late": 0, "working": 1, "on_break": 2, "scheduled": 3}
         team_status.sort(key=lambda x: ORDER.get(x["status"], 4))
 
-        return jsonify({"team": team_status}), 200
+        # date/timezone tell clients which local day "today" refers to.
+        return jsonify({"team": team_status, "date": today.isoformat(), "timezone": tz.key}), 200
+    # ── Manager corrections (worked time, audited) ────────────────────────────
+    def _run(self, fn, status=200):
+        try:
+            return fn(), status
+        except PermissionError as e:
+            return {"error": str(e)}, 403
+        except ValueError as e:
+            return {"error": str(e)}, 400
+
+    def _entry_out(self, entry):
+        data = svc.serialize(entry)
+        u = entry.user
+        data["employee_name"] = (u.display_name or u.username) if u else None
+        if entry.shift:
+            data["shift"] = {"shift_id": entry.shift.shift_id, "start_time": entry.shift.start_time.isoformat(),
+                             "end_time": entry.shift.end_time.isoformat(),
+                             "role": entry.shift.role.name if entry.shift.role else None}
+        return data
+
+    def list_for_location(self):
+        user_id = int(get_jwt_identity())
+        location_id = request.args.get("location_id", type=int)
+        if not location_id:
+            return jsonify({"error": "location_id is required"}), 400
+        body, code = self._run(lambda: {"entries": [self._entry_out(e) for e in svc.list_for_location(
+            manager_user_id=user_id, location_id=location_id, week_start=request.args.get("week_start"))]})
+        return jsonify(body), code
+
+    def correct_entry(self, entry_id):
+        user_id = int(get_jwt_identity())
+        d = request.get_json(silent=True) or {}
+        body, code = self._run(lambda: {"entry": self._entry_out(svc.correct_entry(
+            manager_user_id=user_id, entry_id=entry_id, reason=d.get("reason"),
+            clock_in=d.get("clock_in"), clock_out=d.get("clock_out")))})
+        return jsonify(body), code
+
+    def add_break(self, entry_id):
+        user_id = int(get_jwt_identity())
+        d = request.get_json(silent=True) or {}
+        body, code = self._run(lambda: {"entry": self._entry_out(svc.add_break(
+            manager_user_id=user_id, entry_id=entry_id, reason=d.get("reason"),
+            break_start=d.get("break_start"), break_end=d.get("break_end")))}, 201)
+        return jsonify(body), code
+
+    def update_break(self, break_id):
+        user_id = int(get_jwt_identity())
+        d = request.get_json(silent=True) or {}
+        body, code = self._run(lambda: {"entry": self._entry_out(svc.update_break(
+            manager_user_id=user_id, break_id=break_id, reason=d.get("reason"),
+            break_start=d.get("break_start"), break_end=d.get("break_end")))})
+        return jsonify(body), code
+
+    def delete_break(self, break_id):
+        user_id = int(get_jwt_identity())
+        d = request.get_json(silent=True) or {}
+        body, code = self._run(lambda: {"entry": self._entry_out(svc.delete_break(
+            manager_user_id=user_id, break_id=break_id, reason=d.get("reason")))})
+        return jsonify(body), code
+
+    def audit_log(self, entry_id):
+        user_id = int(get_jwt_identity())
+        body, code = self._run(lambda: {"history": [svc.serialize_audit(a) for a in svc.audit_log(
+            manager_user_id=user_id, entry_id=entry_id)]})
+        return jsonify(body), code

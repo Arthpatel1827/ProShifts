@@ -1,7 +1,10 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { LogOut, Menu, MapPin } from "lucide-react";
+import { useState } from "react";
+import { Globe, LogOut, Menu, MapPin, Sparkles } from "lucide-react";
+import { LocationTimezoneDialog } from "./location-timezone";
+import { AssistantDialog } from "./ai/assistant-dialog";
 import { logout } from "@/lib/api/auth";
 import { Avatar } from "@/components/ui/primitives";
 import { useManager } from "./manager-context";
@@ -9,16 +12,20 @@ import { useManager } from "./manager-context";
 const PAGE_TITLES: Record<string, string> = {
     "/manager/dashboard": "Dashboard",
     "/manager/schedule": "Schedule",
+    "/manager/timesheets": "Timesheets",
     "/manager/team": "Team",
     "/manager/analytics": "Analytics",
     "/manager/requests": "Requests",
     "/manager/messaging": "Messaging",
+    "/manager/settings": "Settings",
 };
 
 export function TopBar({ onMenu }: { onMenu: () => void }) {
     const pathname = usePathname();
     const router = useRouter();
-    const { user, locations, location, setLocationId } = useManager();
+    const { user, locations, location, setLocationId, timezone, canApprove } = useManager();
+    const [tzOpen, setTzOpen] = useState(false);
+    const [aiOpen, setAiOpen] = useState(false);
 
     const title = Object.entries(PAGE_TITLES).find(([path]) => pathname.startsWith(path))?.[1] ?? "";
     const name = user?.display_name || user?.username || "";
@@ -65,6 +72,28 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
                     </span>
                 ) : null}
 
+                {location && (
+                    <button
+                        onClick={canApprove ? () => setTzOpen(true) : undefined}
+                        disabled={!canApprove}
+                        title={canApprove ? "Change the location's timezone" : "Location timezone"}
+                        className="hidden items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-muted-foreground enabled:hover:bg-accent enabled:hover:text-foreground lg:flex"
+                    >
+                        <Globe className="h-3.5 w-3.5" />
+                        {timezone.replace(/_/g, " ")}
+                    </button>
+                )}
+
+                {location && (
+                    <button
+                        onClick={() => setAiOpen(true)}
+                        className="flex items-center gap-1.5 rounded-md border border-primary/25 bg-primary/5 px-2.5 py-1.5 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+                    >
+                        <Sparkles className="h-4 w-4" />
+                        <span className="hidden sm:inline">Ask AI</span>
+                    </button>
+                )}
+
                 {name && (
                     <div className="hidden items-center gap-2 md:flex">
                         <Avatar name={name} />
@@ -83,6 +112,8 @@ export function TopBar({ onMenu }: { onMenu: () => void }) {
                     <span className="hidden sm:inline">Sign out</span>
                 </button>
             </div>
+            <LocationTimezoneDialog open={tzOpen} onOpenChange={setTzOpen} />
+            <AssistantDialog open={aiOpen} onOpenChange={setAiOpen} />
         </header>
     );
 }

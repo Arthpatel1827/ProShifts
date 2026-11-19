@@ -5,14 +5,15 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 
 from extensions import db
-from models import TimeEntry, BreakEntry, Shift, ShiftAssignment, Company, Employment
+from utils import timezones as tzu
+from models import TimeEntry, BreakEntry, Shift, ShiftAssignment, Company, Employment, TimeEntryAudit
 
 
 class TimeEntryService:
 
     # ── Clock in ──────────────────────────────────────────────────────────────
     def clock_in(self, *, user_id, shift_id=None, notes=None,
-                latitude=None, longitude=None, pin=None) -> TimeEntry:
+                latitude=None, longitude=None, pin=None, via_kiosk=False) -> TimeEntry:
 
         if self._get_active(user_id):
             raise ValueError("You are already clocked in. Clock out first.")
@@ -20,7 +21,14 @@ class TimeEntryService:
         company = self._get_company(user_id)
         method  = company.clock_in_method if company else "gps"
 
-        if method == "gps":
+        if via_kiosk:
+            # The store's own tablet, set up by a manager, is the proof of being at work:
+            # no phone GPS or daily PIN. Manager-only mode still applies.
+            if method == "manager_only":
+                raise ValueError("Clock-in is managed by your manager.")
+        elif method == "kiosk_pin":
+            raise ValueError("Clock in on the store's punch-in tablet with your personal PIN.")
+        elif method == "gps":
             if latitude is None or longitude is None:
                 raise ValueError("Location required to clock in.")
             if company:
@@ -67,9 +75,11 @@ class TimeEntryService:
 
                 if now < window_open:
                     mins_until = int((window_open - now).total_seconds() / 60)
+                    # Shown in the location's local time, not the database's timezone.
+                    tz = tzu.location_tz(shift.location)
                     raise ValueError(
                         f"Too early to clock in. You can clock in from "
-                        f"{window_open.strftime('%I:%M %p')} "
+                        f"{tzu.format_local_time(window_open, tz)} "
                         f"(in {mins_until} minutes)."
                     )
                 if now > window_close:
@@ -213,9 +223,10 @@ class TimeEntryService:
 
                 if now < window_open:
                     mins_left = int((window_open - now).total_seconds() / 60)
+                    tz = tzu.location_tz(shift.location)
                     raise ValueError(
                         f"Too early to clock out. Your shift ends at "
-                        f"{shift_end.strftime('%I:%M %p')} "
+                        f"{tzu.format_local_time(shift_end, tz)} "
                         f"({mins_left} minutes remaining)."
                     )
                 if now > window_close:
@@ -246,13 +257,13 @@ class TimeEntryService:
 
     # ── Weekly summary ────────────────────────────────────────────────────────
     def get_weekly_summary(self, user_id: int) -> Dict[str, Any]:
-        now    = datetime.now(timezone.utc)
-        monday = (now - timedelta(days=now.weekday())).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        # This week = since Monday 00:00 at the employee's location.
+        tz          = tzu.user_tz(user_id)
+        monday      = tzu.week_monday(tzu.local_today(tz))
+        week_start, _ = tzu.day_bounds(tz, monday)
         entries = TimeEntry.query.filter(
             TimeEntry.user_id  == user_id,
-            TimeEntry.clock_in >= monday,
+            TimeEntry.clock_in >= week_start,
             TimeEntry.clock_out.isnot(None),
         ).all()
 
@@ -262,7 +273,7 @@ class TimeEntryService:
             for e in entries
         )
         return {
-            "week_start":    monday.date().isoformat(),
+            "week_start":    monday.isoformat(),
             "total_entries": len(entries),
             "total_minutes": total_minutes,
             "total_hours":   round(total_minutes / 60, 2),
@@ -272,22 +283,29 @@ class TimeEntryService:
     # ── Get today's shift ─────────────────────────────────────────────────────
     def get_today_shift(self, user_id: int) -> Optional[Dict]:
         from models import Shift
-        now   = datetime.now(timezone.utc)
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        end   = start + timedelta(days=1)
+        # Local calendar day at the employee's location, plus an overnight shift from
+        # yesterday that is still running.
+        tz    = tzu.user_tz(user_id)
+        now   = tzu.utc_now()
+        start, end = tzu.day_bounds(tz, tzu.local_today(tz))
 
-        shift = (
+        candidates = (
             Shift.query
             .join(ShiftAssignment, ShiftAssignment.shift_id == Shift.shift_id)
             .filter(
                 ShiftAssignment.user_id == user_id,
                 Shift.status            == "published",
-                Shift.start_time        >= start,
                 Shift.start_time        <  end,
+                db.or_(Shift.start_time >= start, Shift.end_time > now),
             )
             .order_by(Shift.start_time.asc())
-            .first()
+            .all()
         )
+        # In-progress first, otherwise the earliest shift today (previous behaviour).
+        shift = next(
+            (s for s in candidates if tzu.as_aware_utc(s.start_time) <= now < tzu.as_aware_utc(s.end_time)),
+            None,
+        ) or next((s for s in candidates if tzu.as_aware_utc(s.start_time) >= start), None)
         if not shift:
             return None
         return {
@@ -309,12 +327,23 @@ class TimeEntryService:
                 "paid_break":           False,
                 "gps_radius_meters":    100,
             }
+        # Only when the current PIN stops working — the PIN itself is stored hashed and is
+        # shown once, to the manager who generates it.
+        pin_expires_at = None
+        if company.clock_in_pin and company.pin_generated_at:
+            generated = company.pin_generated_at
+            if generated.tzinfo is None:
+                generated = generated.replace(tzinfo=timezone.utc)
+            expires = generated + timedelta(hours=24)
+            if expires > datetime.now(timezone.utc):
+                pin_expires_at = expires.isoformat()
         return {
             "clock_in_method":      company.clock_in_method,
             "break_duration_mins":  company.break_duration_mins,
             "max_breaks_per_shift": company.max_breaks_per_shift,
             "paid_break":           company.paid_break,
             "gps_radius_meters":    company.gps_radius_meters,
+            "pin_expires_at":       pin_expires_at,
         }
 
     # ── Update clock settings (owner/manager only) ────────────────────────────
@@ -328,11 +357,9 @@ class TimeEntryService:
         paid_break:          Optional[bool] = None,
         gps_radius_meters:   Optional[int]  = None,
     ) -> Company:
-        company = self._get_company(manager_user_id)
-        if not company:
-            raise ValueError("No company found.")
+        company = self._approver_company(manager_user_id)
 
-        if clock_in_method and clock_in_method in ("manager_only", "gps", "qr_pin"):
+        if clock_in_method and clock_in_method in ("manager_only", "gps", "qr_pin", "kiosk_pin"):
             company.clock_in_method = clock_in_method
 
         if break_duration_mins is not None and break_duration_mins >= 0:
@@ -352,14 +379,220 @@ class TimeEntryService:
 
     # ── Generate daily PIN ────────────────────────────────────────────────────
     def generate_pin(self, manager_user_id: int) -> str:
-        company = self._get_company(manager_user_id)
-        if not company:
-            raise ValueError("No company found.")
+        # Staff must never see the PIN: it's what proves they're at the store.
+        company = self._approver_company(manager_user_id)
         pin = f"{secrets.randbelow(9000) + 1000}"
         company.clock_in_pin     = self._hash_pin(pin)
         company.pin_generated_at = datetime.now(timezone.utc)
         db.session.commit()
         return pin
+
+    # ── Manager corrections to worked time ────────────────────────────────────
+    # Scheduled shifts are edited in ShiftService; this is the record of what was
+    # actually worked. Every change keeps the old value in time_entry_audit.
+    MAX_ENTRY_HOURS = 24
+
+    def list_for_location(self, *, manager_user_id, location_id, week_start):
+        """Time entries of everyone at this location for the local week."""
+        from services.rbac_service import require_location_role
+        require_location_role(manager_user_id, location_id)
+        day = tzu.parse_date(week_start)
+        if not day:
+            raise ValueError("week_start must be YYYY-MM-DD")
+        tz = tzu.location_tz_by_id(location_id)
+        ws, we = tzu.week_bounds(tz, day)
+        user_ids = [e.user_id for e in Employment.query.filter_by(location_id=location_id).all()]
+        entries = TimeEntry.query.filter(
+            TimeEntry.user_id.in_(user_ids or [0]),
+            TimeEntry.clock_in >= ws, TimeEntry.clock_in < we,
+        ).order_by(TimeEntry.clock_in.asc()).all()
+        # Someone working at two locations: only entries for this location's shifts,
+        # or entries with no shift if this is their location.
+        out = []
+        for e in entries:
+            if e.shift_id and e.shift and e.shift.location_id != location_id:
+                continue
+            out.append(e)
+        return out
+
+    def correct_entry(self, *, manager_user_id, entry_id, reason, clock_in=None, clock_out=None):
+        entry, tz = self._correctable(manager_user_id, entry_id)
+        reason = self._reason(reason)
+        new_in = self._parse_local(clock_in, tz) if clock_in else tzu.as_aware_utc(entry.clock_in)
+        new_out = self._parse_local(clock_out, tz) if clock_out else tzu.as_aware_utc(entry.clock_out)
+        if new_out is not None:
+            if new_out <= new_in:
+                raise ValueError("Clock-out must be after clock-in")
+            if new_out - new_in > timedelta(hours=self.MAX_ENTRY_HOURS):
+                raise ValueError(f"A time entry can't be longer than {self.MAX_ENTRY_HOURS} hours")
+        if new_out and new_out > tzu.utc_now() + timedelta(minutes=1):
+            raise ValueError("Clock-out can't be in the future")
+        if new_in > tzu.utc_now() + timedelta(minutes=1):
+            raise ValueError("Clock-in can't be in the future")
+        for b in entry.breaks:
+            bs, be = tzu.as_aware_utc(b.break_start), tzu.as_aware_utc(b.break_end)
+            if bs < new_in or (new_out and (be or bs) > new_out):
+                raise ValueError("A break would fall outside the corrected times; fix the break first")
+        self._assert_no_entry_overlap(entry, new_in, new_out)
+
+        changed = False
+        if clock_in and new_in != tzu.as_aware_utc(entry.clock_in):
+            self._audit(entry, manager_user_id, "clock_in", entry.clock_in, new_in, reason)
+            entry.clock_in, changed = new_in, True
+        if clock_out and new_out != tzu.as_aware_utc(entry.clock_out):
+            self._audit(entry, manager_user_id, "clock_out", entry.clock_out, new_out, reason)
+            entry.clock_out, changed = new_out, True
+        if not changed:
+            raise ValueError("Nothing to change")
+        self._finish_correction(entry, manager_user_id)
+        return entry
+
+    def add_break(self, *, manager_user_id, entry_id, reason, break_start, break_end):
+        entry, tz = self._correctable(manager_user_id, entry_id)
+        reason = self._reason(reason)
+        bs, be = self._parse_local(break_start, tz), self._parse_local(break_end, tz)
+        self._check_break(entry, bs, be)
+        brk = BreakEntry(break_start=bs, break_end=be, duration_minutes=int((be - bs).total_seconds() // 60))
+        entry.breaks.append(brk)
+        db.session.flush()
+        self._audit(entry, manager_user_id, "break_added", None, f"{bs.isoformat()}/{be.isoformat()}", reason, brk.break_id)
+        self._finish_correction(entry, manager_user_id)
+        return entry
+
+    def update_break(self, *, manager_user_id, break_id, reason, break_start=None, break_end=None):
+        brk = BreakEntry.query.get(break_id)
+        if not brk:
+            raise ValueError("Break not found")
+        entry, tz = self._correctable(manager_user_id, brk.entry_id)
+        reason = self._reason(reason)
+        old = f"{tzu.as_aware_utc(brk.break_start).isoformat()}/{tzu.as_aware_utc(brk.break_end).isoformat() if brk.break_end else ''}"
+        bs = self._parse_local(break_start, tz) if break_start else tzu.as_aware_utc(brk.break_start)
+        be = self._parse_local(break_end, tz) if break_end else tzu.as_aware_utc(brk.break_end)
+        if be is None:
+            raise ValueError("Give the break an end time")
+        self._check_break(entry, bs, be, ignore_break_id=brk.break_id)
+        brk.break_start, brk.break_end = bs, be
+        brk.duration_minutes = int((be - bs).total_seconds() // 60)
+        self._audit(entry, manager_user_id, "break_changed", old, f"{bs.isoformat()}/{be.isoformat()}", reason, brk.break_id)
+        self._finish_correction(entry, manager_user_id)
+        return entry
+
+    def delete_break(self, *, manager_user_id, break_id, reason):
+        brk = BreakEntry.query.get(break_id)
+        if not brk:
+            raise ValueError("Break not found")
+        entry, _ = self._correctable(manager_user_id, brk.entry_id)
+        reason = self._reason(reason)
+        old = f"{tzu.as_aware_utc(brk.break_start).isoformat()}/{tzu.as_aware_utc(brk.break_end).isoformat() if brk.break_end else ''}"
+        self._audit(entry, manager_user_id, "break_removed", old, None, reason, brk.break_id)
+        db.session.delete(brk)
+        db.session.flush()
+        db.session.refresh(entry)
+        self._finish_correction(entry, manager_user_id)
+        return entry
+
+    def audit_log(self, *, manager_user_id, entry_id):
+        self._correctable(manager_user_id, entry_id, for_read=True)
+        return TimeEntryAudit.query.filter_by(entry_id=entry_id).order_by(TimeEntryAudit.changed_at.asc(),
+                                                                          TimeEntryAudit.audit_id.asc()).all()
+
+    @staticmethod
+    def serialize_audit(a: TimeEntryAudit) -> dict:
+        who = a.changer
+        return {
+            "audit_id": a.audit_id,
+            "entry_id": a.entry_id,
+            "break_id": a.break_id,
+            "action": a.action,
+            "old_value": a.old_value,
+            "new_value": a.new_value,
+            "reason": a.reason,
+            "changed_by": a.changed_by,
+            "changed_by_name": (who.display_name or who.username) if who else None,
+            "changed_at": a.changed_at.isoformat(),
+        }
+
+    # helpers for corrections
+    def _correctable(self, manager_user_id, entry_id, for_read=False):
+        """Owner/manager at a location where the employee works (same company). Nobody
+        corrects their own record except an owner (no one above them)."""
+        from services.rbac_service import APPROVER_ROLES, MANAGER_ROLES
+        entry = TimeEntry.query.get(entry_id)
+        if not entry:
+            raise ValueError("Time entry not found")
+        roles = MANAGER_ROLES if for_read else APPROVER_ROLES
+        loc_id = entry.shift.location_id if entry.shift_id and entry.shift else None
+        target_locs = {e.location_id for e in Employment.query.filter_by(user_id=entry.user_id).all()}
+        candidate_locs = {loc_id} if loc_id else target_locs
+        mgr = None
+        for e in Employment.query.filter_by(user_id=manager_user_id, status="active").all():
+            if e.location_id in candidate_locs and e.role and e.role.name.lower() in roles:
+                mgr = e
+                break
+        if not mgr:
+            raise PermissionError("Only an owner or manager at this employee's location can correct their time")
+        if not for_read and entry.user_id == manager_user_id and mgr.role.name.lower() != "owner":
+            raise PermissionError("You can't correct your own time entries; ask an owner")
+        return entry, tzu.location_tz_by_id(mgr.location_id)
+
+    @staticmethod
+    def _reason(reason):
+        reason = (reason or "").strip()
+        if len(reason) < 3:
+            raise ValueError("Give a reason for the correction (it's kept in the history)")
+        return reason[:500]
+
+    @staticmethod
+    def _parse_local(value, tz):
+        try:
+            dt = datetime.fromisoformat(str(value))
+        except ValueError:
+            raise ValueError(f"Invalid time: {value}")
+        return tzu.as_aware_utc(tzu.localize(dt, tz))
+
+    def _check_break(self, entry, bs, be, ignore_break_id=None):
+        if be <= bs:
+            raise ValueError("A break must end after it starts")
+        start = tzu.as_aware_utc(entry.clock_in)
+        end = tzu.as_aware_utc(entry.clock_out) if entry.clock_out else tzu.utc_now()
+        if bs < start or be > end:
+            raise ValueError("The break must be inside the time worked")
+        for b in entry.breaks:
+            if b.break_id == ignore_break_id:
+                continue
+            os_, oe = tzu.as_aware_utc(b.break_start), tzu.as_aware_utc(b.break_end) if b.break_end else end
+            if os_ < be and oe > bs:
+                raise ValueError("Breaks can't overlap each other")
+
+    @staticmethod
+    def _assert_no_entry_overlap(entry, new_in, new_out):
+        far = new_out or tzu.utc_now()
+        for other in TimeEntry.query.filter(TimeEntry.user_id == entry.user_id, TimeEntry.entry_id != entry.entry_id).all():
+            o_in = tzu.as_aware_utc(other.clock_in)
+            o_out = tzu.as_aware_utc(other.clock_out) if other.clock_out else tzu.utc_now()
+            if o_in < far and o_out > new_in:
+                raise ValueError("That would overlap another time entry for this employee")
+
+    @staticmethod
+    def _audit(entry, user_id, action, old, new, reason, break_id=None):
+        fmt = lambda v: v.isoformat() if hasattr(v, "isoformat") else v
+        db.session.add(TimeEntryAudit(entry_id=entry.entry_id, break_id=break_id, changed_by=user_id,
+                                      action=action, old_value=fmt(old), new_value=fmt(new), reason=reason))
+
+    def _finish_correction(self, entry, manager_user_id):
+        """Recompute totals the same way clock-out does, stamp who corrected it, save."""
+        if entry.clock_out:
+            worked = int((tzu.as_aware_utc(entry.clock_out) - tzu.as_aware_utc(entry.clock_in)).total_seconds() // 60)
+            emp = Employment.query.filter_by(user_id=entry.user_id).first()
+            paid = emp.company.paid_break if emp and emp.company else False
+            if not paid:
+                worked = max(worked - sum(b.duration_minutes or 0 for b in entry.breaks), 0)
+            entry.total_minutes = worked
+        entry.corrected_at = datetime.utcnow()
+        entry.corrected_by = manager_user_id
+        db.session.commit()
+        import logging
+        logging.getLogger("proshifts.audit").info("time entry %s corrected by user %s", entry.entry_id, manager_user_id)
 
     # ── Serialization ─────────────────────────────────────────────────────────
     @staticmethod
@@ -404,6 +637,8 @@ class TimeEntryService:
             "is_on_break":    ongoing_break is not None,
             "breaks":         breaks,
             "break_count":    len(breaks),
+            "corrected_at":   entry.corrected_at.isoformat() if entry.corrected_at else None,
+            "corrected_by":   entry.corrected_by,
         }
 
     # ── Private helpers ───────────────────────────────────────────────────────
@@ -413,6 +648,16 @@ class TimeEntryService:
         return TimeEntry.query.filter_by(
             user_id=user_id, clock_out=None
         ).first()
+
+    @staticmethod
+    def _approver_company(user_id: int) -> Company:
+        """The company an owner/manager administers. Clock-in rules and the daily PIN are
+        company-wide controls, so staff and supervisors can't change or see them."""
+        from services.rbac_service import APPROVER_ROLES, company_role_employment
+        emp = company_role_employment(user_id, APPROVER_ROLES)
+        if not emp or not emp.company:
+            raise PermissionError("Only an owner or manager can change clock-in settings.")
+        return emp.company
 
     @staticmethod
     def _get_company(user_id: int) -> Optional[Company]:

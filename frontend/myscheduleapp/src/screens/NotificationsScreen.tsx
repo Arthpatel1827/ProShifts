@@ -253,7 +253,7 @@ export default function NotificationsScreen({ navigation }: any) {
                                 secondaryText={`${notifications.length} total`}
                             />
                         </View>
-                    ) : null}
+                    ) : undefined}
                     refreshControl={
                         <RefreshControl
                             refreshing={refreshing}

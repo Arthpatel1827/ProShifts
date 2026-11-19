@@ -61,6 +61,21 @@ def get_members(channel_id: int):
 def add_member(channel_id: int):
     return ctrl.add_member(channel_id)
 
+@messaging_bp.delete("/channels/<int:channel_id>/members/<int:member_id>")
+@jwt_required()
+def remove_member(channel_id: int, member_id: int):
+    return ctrl.remove_member(channel_id, member_id)
+
+@messaging_bp.patch("/channels/<int:channel_id>/members/<int:member_id>")
+@jwt_required()
+def set_admin(channel_id: int, member_id: int):
+    return ctrl.set_admin(channel_id, member_id)
+
+@messaging_bp.get("/locations/<int:location_id>/groups")
+@jwt_required()
+def location_groups(location_id: int):
+    return ctrl.location_groups(location_id)
+
 @messaging_bp.post("/messages/<int:message_id>/pin")
 @jwt_required()
 def toggle_pin(message_id: int):

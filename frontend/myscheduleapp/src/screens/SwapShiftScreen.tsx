@@ -10,6 +10,7 @@ import { colors } from '../theme/colors';
 import { ShiftsAPI, SwapsAPI, DropsAPI, AdminAPI } from '../api/api';
 import { AuthContext } from '../context/AuthContext';
 import ShiftRing from '../components/home/ShiftRing';
+import SwapReview, { SwapValidation } from '../components/SwapReview';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -125,6 +126,10 @@ export default function SwapShiftScreen({ navigation }: any) {
     const [targetMember, setTargetMember] = useState<TeamMember | null>(null);
     const [theirShift, setTheirShift] = useState<ShiftDetail | null>(null);
     const [reason, setReason] = useState('');
+    // Server-side check of both schedules after the swap.
+    const [review, setReview] = useState<SwapValidation | null>(null);
+    const [reviewing, setReviewing] = useState(false);
+    const [reviewError, setReviewError] = useState<string | null>(null);
 
     // Modals
     const [showColleagues, setShowColleagues] = useState(false);
@@ -176,6 +181,23 @@ export default function SwapShiftScreen({ navigation }: any) {
             setLoadingColShifts(false);
         }
     };
+
+    useEffect(() => {
+        setReview(null);
+        setReviewError(null);
+        if (tab !== 'targeted' || !myShift || !targetMember || !theirShift) return;
+        let alive = true;
+        setReviewing(true);
+        SwapsAPI.preview({
+            shift_id: myShift.shift_id,
+            receiving_user_id: targetMember.user_id,
+            offered_shift_id: theirShift.shift_id,
+        })
+            .then(({ data }) => alive && setReview(data?.validation ?? null))
+            .catch((e: any) => alive && setReviewError(e?.response?.data?.error ?? "Couldn't check this swap."))
+            .finally(() => alive && setReviewing(false));
+        return () => { alive = false; };
+    }, [tab, myShift, targetMember, theirShift]);
 
     const switchTab = (t: Tab) => {
         setTab(t);
@@ -234,7 +256,9 @@ export default function SwapShiftScreen({ navigation }: any) {
                             Alert.alert('Sent ✓', `${targetMember.display_name || targetMember.username} has been notified and must accept the swap.`);
                             navigation.navigate('MySwaps');
                         } catch (e: any) {
-                            Alert.alert('Error', e?.response?.data?.error ?? 'Failed to send swap.');
+                            // The schedule changed since the preview: show the new result.
+                            if (e?.response?.data?.validation) setReview(e.response.data.validation);
+                            Alert.alert('Swap not sent', e?.response?.data?.error ?? 'Failed to send swap.');
                         } finally {
                             setSubmitting(false);
                         }
@@ -276,7 +300,7 @@ export default function SwapShiftScreen({ navigation }: any) {
     const canSubmit = tab === 'open'
         ? !!myShift
         : tab === 'targeted'
-            ? !!myShift && !!targetMember && !!theirShift
+            ? !!myShift && !!targetMember && !!theirShift && !reviewing && !!review?.ok
             : !!myShift;
 
     // Progress through the request for the ring: shift → (colleague → their shift).
@@ -444,6 +468,10 @@ export default function SwapShiftScreen({ navigation }: any) {
                             </>
                         )}
                     </>
+                )}
+
+                {tab === 'targeted' && myShift && targetMember && theirShift && (
+                    <SwapReview validation={review} loading={reviewing} error={reviewError} />
                 )}
 
                 {/* Reason */}

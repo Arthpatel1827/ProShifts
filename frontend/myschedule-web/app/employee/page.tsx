@@ -5,7 +5,7 @@ export default function EmployeePage() {
                 Web access for staff is coming soon
             </h1>
             <p className="mt-2 max-w-sm text-sm text-muted-foreground">
-                Please use the MySchedule mobile app to check your schedule, clock in, and manage your shifts.
+                Please use the ProShifts mobile app to check your schedule, clock in, and manage your shifts.
             </p>
         </div>
     );

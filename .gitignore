@@ -19,3 +19,7 @@ Thumbs.db
 .idea/
 .vscode/
 *.log
+
+# Redis snapshots from local runs
+dump.rdb
+*.rdb

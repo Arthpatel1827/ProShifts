@@ -7,6 +7,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons }     from '@expo/vector-icons';
 import { colors }       from '../theme/colors';
+import SwapReview, { SwapValidation } from '../components/SwapReview';
 import { SwapsAPI }     from '../api/api';
 import { AuthContext }  from '../context/AuthContext';
 
@@ -117,6 +118,10 @@ export default function MySwapsScreen({ navigation }: any) {
     // Offer modal
     const [offerSwap,    setOfferSwap]    = useState<Swap | null>(null);
     const [offerShift,   setOfferShift]   = useState<MyShift | null>(null);
+    // Resulting-schedule check for the offer, from the server.
+    const [offerReview,  setOfferReview]  = useState<SwapValidation | null>(null);
+    const [offerChecking, setOfferChecking] = useState(false);
+    const [offerError,   setOfferError]   = useState<string | null>(null);
     const [showOffer,    setShowOffer]    = useState(false);
     const [submittingOffer, setSubmittingOffer] = useState(false);
 
@@ -186,7 +191,8 @@ export default function MySwapsScreen({ navigation }: any) {
                             await fetchAll();
                             Alert.alert('Accepted ✓', 'Waiting for manager approval.');
                         } catch (e: any) {
-                            Alert.alert('Error', e?.response?.data?.error ?? 'Failed.');
+                            const conflict = e?.response?.data?.code === 'SWAP_CONFLICT';
+                            Alert.alert(conflict ? 'Conflict detected' : 'Error', e?.response?.data?.error ?? 'Failed.');
                         } finally {
                             setActing(null);
                         }
@@ -223,7 +229,8 @@ export default function MySwapsScreen({ navigation }: any) {
                             await fetchAll();
                             Alert.alert('Accepted ✓', 'Waiting for manager approval.');
                         } catch (e: any) {
-                            Alert.alert('Error', e?.response?.data?.error ?? 'Failed.');
+                            const conflict = e?.response?.data?.code === 'SWAP_CONFLICT';
+                            Alert.alert(conflict ? 'Conflict detected' : 'Error', e?.response?.data?.error ?? 'Failed.');
                         } finally {
                             setActing(null);
                         }
@@ -248,7 +255,25 @@ export default function MySwapsScreen({ navigation }: any) {
     const openOfferModal = (swap: Swap) => {
         setOfferSwap(swap);
         setOfferShift(null);
+        setOfferReview(null);
+        setOfferError(null);
         setShowOffer(true);
+    };
+
+    const pickOfferShift = async (s: MyShift) => {
+        if (!offerSwap) return;
+        setOfferShift(s);
+        setOfferReview(null);
+        setOfferError(null);
+        setOfferChecking(true);
+        try {
+            const { data } = await SwapsAPI.preview({ swap_id: offerSwap.swap_id, offered_shift_id: s.shift_id });
+            setOfferReview(data?.validation ?? null);
+        } catch (e: any) {
+            setOfferError(e?.response?.data?.error ?? "Couldn't check this offer.");
+        } finally {
+            setOfferChecking(false);
+        }
     };
 
     const handleSubmitOffer = async () => {
@@ -260,7 +285,8 @@ export default function MySwapsScreen({ navigation }: any) {
             await fetchAll();
             Alert.alert('Offer Sent ✓', 'The requester will review your offer.');
         } catch (e: any) {
-            Alert.alert('Error', e?.response?.data?.error ?? 'Failed to make offer.');
+            if (e?.response?.data?.validation) setOfferReview(e.response.data.validation);
+            Alert.alert('Offer not sent', e?.response?.data?.error ?? 'Failed to make offer.');
         } finally {
             setSubmittingOffer(false);
         }
@@ -545,7 +571,7 @@ export default function MySwapsScreen({ navigation }: any) {
                                 <Pressable
                                     key={s.shift_id}
                                     style={[styles.offerShiftRow, offerShift?.shift_id === s.shift_id && styles.offerShiftRowActive]}
-                                    onPress={() => setOfferShift(s)}
+                                    onPress={() => pickOfferShift(s)}
                                 >
                                     <View style={[styles.offerCircle, offerShift?.shift_id === s.shift_id && styles.offerCircleActive]}>
                                         {offerShift?.shift_id === s.shift_id && <Ionicons name="checkmark" size={12} color="#fff" />}
@@ -558,10 +584,13 @@ export default function MySwapsScreen({ navigation }: any) {
                                 </Pressable>
                             ))}
                         </ScrollView>
+                        {offerShift && (
+                            <SwapReview validation={offerReview} loading={offerChecking} error={offerError} perspective="receiver" />
+                        )}
                         <Pressable
-                            style={[styles.submitOfferBtn, (!offerShift || submittingOffer) && { opacity: 0.6 }]}
+                            style={[styles.submitOfferBtn, (!offerShift || submittingOffer || offerChecking || !offerReview?.ok) && { opacity: 0.6 }]}
                             onPress={handleSubmitOffer}
-                            disabled={!offerShift || submittingOffer}
+                            disabled={!offerShift || submittingOffer || offerChecking || !offerReview?.ok}
                         >
                             {submittingOffer
                                 ? <ActivityIndicator size="small" color="#fff" />

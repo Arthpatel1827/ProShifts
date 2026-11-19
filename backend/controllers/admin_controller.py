@@ -214,10 +214,17 @@ class AdminController:
         if "notes" in data:
             emp.notes = (data["notes"] or "").strip() or None
 
+        status_changed = False
         if "status" in data and data["status"] in ("active", "inactive"):
+            status_changed = emp.status != data["status"]
             emp.status = data["status"]
 
         db.session.commit()
+        if status_changed:
+            # Active → in #general; inactive → out of the location's channels.
+            from services.messaging_service import MessagingService
+            for e in Employment.query.filter_by(user_id=user_id, comp_id=mgr_emp.comp_id).all():
+                MessagingService().on_employment_changed(user_id, e.location_id)
 
         return jsonify({
             "message": "Profile updated",
@@ -253,6 +260,13 @@ class AdminController:
                 location.loc_lng = (
                     float(data["loc_lng"]) if data["loc_lng"] is not None else None
                 )
+            if "timezone" in data:
+                # Defines the location's calendar day for schedules, attendance and analytics.
+                from utils.timezones import is_valid_timezone
+                tz_name = (data["timezone"] or "").strip()
+                if not is_valid_timezone(tz_name):
+                    return jsonify({"error": "Unknown timezone. Use an IANA name such as America/Toronto."}), 400
+                location.timezone = tz_name
 
             db.session.commit()
 
@@ -264,6 +278,7 @@ class AdminController:
                     "address": location.loc_address,
                     "loc_lat": location.loc_lat,
                     "loc_lng": location.loc_lng,
+                    "timezone": location.timezone,
                 },
             }), 200
 
@@ -295,4 +310,15 @@ class AdminController:
             "notes":             getattr(emp, "notes",             None),
             "hire_date":         emp.start_date.isoformat() if emp.start_date else None,
             "location_id":       emp.location_id,
+            # Whether they've set a personal clock-in PIN — never the PIN itself.
+            "kiosk_pin_set":     bool(getattr(emp, "kiosk_pin_hash", None)),
+            # Joined through an emailed invite, so "Resend invite" applies.
+            "invited":           _was_invited(user.user_email, emp.location_id),
         }
+
+
+def _was_invited(email, location_id) -> bool:
+    from models import OnboardingInvite
+    if not email or not location_id:
+        return False
+    return OnboardingInvite.query.filter_by(email=email, location_id=location_id).first() is not None

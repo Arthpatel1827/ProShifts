@@ -4,7 +4,7 @@ Integration tests run against a real PostgreSQL database (the schema uses CITEXT
 JSON columns) and Redis (JWT blocklist). Point them at throwaway instances:
 
     export TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:5432/myschedule_test
-    export TEST_REDIS_URL=redis://localhost:6379/15
+    export TEST_REDIS_URL=redis://127.0.0.1:6379/15
     pytest
 
 Every table is truncated between tests, so never point TEST_DATABASE_URL at real data.
@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta
 import pytest
 
 TEST_DB = os.getenv("TEST_DATABASE_URL")
-TEST_REDIS = os.getenv("TEST_REDIS_URL", "redis://localhost:6379/15")
+TEST_REDIS = os.getenv("TEST_REDIS_URL", "redis://127.0.0.1:6379/15")
 
 if not TEST_DB:
     pytest.skip("TEST_DATABASE_URL is not set — skipping integration tests", allow_module_level=True)
@@ -28,6 +28,9 @@ os.environ.update({
     "CELERY_BROKER_URL": TEST_REDIS,
     "CELERY_RESULT_BACKEND": TEST_REDIS,
     "JWT_SECRET_KEY": "test-only-secret-key-that-is-long-enough-1234",
+    "KIOSK_PIN_SECRET": "test-only-kiosk-pin-secret-that-is-long-enough-5678",
+    # One process: socket events stay in-process so the Socket.IO test client can see them.
+    "SOCKETIO_MESSAGE_QUEUE": "",
     "FLASK_ENV": "development",
     "EMAIL_SENDING_ENABLED": "false",
     "CORS_ORIGINS": "http://localhost:3000",
@@ -47,7 +50,12 @@ PASSWORD = "Correct-horse-1"
 
 @pytest.fixture(scope="session")
 def app():
-    flask_app.config.update(TESTING=True, RATELIMIT_ENABLED=False)
+    flask_app.config.update(TESTING=True)
+    # RATELIMIT_ENABLED in config is only read at init_app, which already ran when app.py
+    # was imported; switch the limiter off directly. Limits persist in Redis between
+    # runs, so without this the suite starts failing with 429s after a few runs an hour.
+    from extensions import limiter
+    limiter.enabled = False
     return flask_app
 
 

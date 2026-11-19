@@ -23,6 +23,7 @@ import { ShiftsAPI } from '../../api/api';
 import { AuthContext } from '../../context/AuthContext';
 import { useQuery } from '@apollo/client/react';
 import { MY_LOCATIONS_QUERY } from '../../graphql/operations';
+import MyWeekView from '../../components/schedule/MyWeekView';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -111,6 +112,9 @@ export default function ScheduleScreen({ navigation, route }: any) {
         (user?.role?.name ?? '').toLowerCase()
     );
     const canEdit = isManager && !readOnly;
+    // Staff see their own week as a visual timeline first; the full team list stays a tap away.
+    const [view, setView] = useState<'mine' | 'team'>('mine');
+    const showMine = !canEdit && view === 'mine';
 
     const [weekStart, setWeekStart] = useState<Date>(() => getWeekStart(new Date()));
     const [shifts, setShifts] = useState<ShiftDetail[]>([]);
@@ -258,6 +262,25 @@ export default function ScheduleScreen({ navigation, route }: any) {
                 )}
             </View>
 
+            {!canEdit && (
+                <View style={styles.segment} accessibilityRole="tablist">
+                    {(['mine', 'team'] as const).map(v => (
+                        <Pressable
+                            key={v}
+                            onPress={() => setView(v)}
+                            style={[styles.segmentBtn, view === v && styles.segmentBtnOn]}
+                            accessibilityRole="tab"
+                            accessibilityState={{ selected: view === v }}
+                        >
+                            <Text style={[styles.segmentText, view === v && styles.segmentTextOn]}>
+                                {v === 'mine' ? 'My week' : 'Team schedule'}
+                            </Text>
+                        </Pressable>
+                    ))}
+                </View>
+            )}
+
+            {showMine ? <MyWeekView /> : (<>
             {/* Location picker */}
             <Pressable
                 style={styles.locationBar}
@@ -410,6 +433,8 @@ export default function ScheduleScreen({ navigation, route }: any) {
                     })}
                 </ScrollView>
             )}
+
+            </>)}
 
             {/* ✅ Bottom action bar — managers only */}
             {canEdit && (
@@ -571,6 +596,11 @@ const styles = StyleSheet.create({
         backgroundColor: '#fff',
     },
     backBtn: { padding: 4, marginRight: 8 },
+    segment: { flexDirection: 'row', margin: 12, marginBottom: 4, padding: 3, borderRadius: 999, backgroundColor: '#F1F1F6' },
+    segmentBtn: { flex: 1, paddingVertical: 8, borderRadius: 999, alignItems: 'center' },
+    segmentBtnOn: { backgroundColor: '#fff', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 4, elevation: 2 },
+    segmentText: { fontSize: 13, fontWeight: '600', color: colors.gray },
+    segmentTextOn: { color: colors.primary, fontWeight: '800' },
     screenTitle: { flex: 1, fontSize: 18, fontWeight: '700', color: colors.text },
     todayBtn: {
         paddingHorizontal: 12,

@@ -2,6 +2,9 @@
 import axios from 'axios';
 import { API_BASE_URL } from '../config/env';
 import { getAccessToken, getRefreshToken, setTokens, clearTokens } from '../utils/secureStore';
+export { describeApiError } from '../utils/apiError';
+import { clearStoredCredentials } from '../utils/biometrics';
+import { emitSessionExpired, isAuthEndpoint, isSessionRejected } from '../utils/sessionEvents';
 
 // ── Axios instance ─────────────────────────────────────────────────────────────
 export const api = axios.create({ baseURL: API_BASE_URL, timeout: 15000 });
@@ -13,30 +16,44 @@ api.interceptors.request.use(async (config) => {
     return config;
 });
 
-// Auto-refresh access token on 401
+// One refresh at a time: a screen that fires ten requests with a dead token must not send
+// ten refreshes. Every waiting request reuses the same new access token.
+let refreshing: Promise<string> | null = null;
+
+async function refreshAccessToken(): Promise<string> {
+    const refreshToken = await getRefreshToken();
+    if (!refreshToken) throw new Error('No refresh token');
+    const { data } = await axios.post(
+        `${API_BASE_URL}/auth/refresh`,
+        {},
+        { headers: { Authorization: `Bearer ${refreshToken}` }, timeout: 15000 }
+    );
+    await setTokens(data.access_token, refreshToken);
+    return data.access_token;
+}
+
+// A rejected session (expired / revoked / signed by another server) → try one refresh and replay
+// the request. If that fails too, the stored session is dead: clear it and tell the app to sign
+// the user out, so they land on the login screen instead of a screen where nothing loads.
 api.interceptors.response.use(
     (res) => res,
     async (error) => {
         const original = error.config;
-        if (error.response?.status === 401 && !original._retry) {
-            original._retry = true;
-            try {
-                const refreshToken = await getRefreshToken();
-                if (!refreshToken) throw new Error('No refresh token');
-                const { data } = await axios.post(
-                    `${API_BASE_URL}/auth/refresh`,
-                    {},
-                    { headers: { Authorization: `Bearer ${refreshToken}` } }
-                );
-                await setTokens(data.access_token, refreshToken);
-                original.headers.Authorization = `Bearer ${data.access_token}`;
-                return api(original);
-            } catch {
-                await clearTokens();
-                return Promise.reject(error);
-            }
+        if (!original || original._retry || isAuthEndpoint(original.url) || !isSessionRejected(error)) {
+            return Promise.reject(error);
         }
-        return Promise.reject(error);
+        original._retry = true;
+        try {
+            refreshing = refreshing ?? refreshAccessToken().finally(() => { refreshing = null; });
+            const token = await refreshing;
+            original.headers.Authorization = `Bearer ${token}`;
+            return api(original);
+        } catch {
+            await clearTokens();
+            await clearStoredCredentials();
+            emitSessionExpired();
+            return Promise.reject(error);
+        }
     }
 );
 
@@ -121,8 +138,9 @@ export const ShiftsAPI = {
     list: (location_id: number, week_start?: string, status?: string) =>
         api.get('/shifts/', { params: { location_id, week_start, status } }),
 
-    mine: (week_start?: string) =>
-        api.get('/shifts/mine', { params: { week_start } }),
+    // include_overlapping: also a shift from the night before that runs into the week.
+    mine: (week_start?: string, include_overlapping = false) =>
+        api.get('/shifts/mine', { params: { week_start, include_overlapping: include_overlapping || undefined } }),
 
     get: (shift_id: number) =>
         api.get(`/shifts/${shift_id}`),
@@ -176,6 +194,12 @@ export const ShiftsAPI = {
     }) => api.post('/shifts/bulk-week', body),
 };
 
+// ── Personal clock-in PIN (for the store's punch-in tablet) ───────────────────
+export const KioskAPI = {
+    pinStatus: () => api.get('/kiosk/pin'),
+    setPin: (pin: string, confirm: string) => api.put('/kiosk/pin', { pin, confirm }),
+};
+
 // ── Swaps API ──────────────────────────────────────────────────────────────────
 export const SwapsAPI = {
     // Create
@@ -188,6 +212,14 @@ export const SwapsAPI = {
         offered_shift_id: number;
         reason?: string;
     }) => api.post('/swaps/targeted', body),
+
+    // Resulting-schedule check before sending a swap or an offer
+    preview: (body: {
+        shift_id?: number;
+        receiving_user_id?: number;
+        offered_shift_id: number;
+        swap_id?: number;
+    }) => api.post('/swaps/preview', body),
 
     // Offer flow
     makeOffer: (swap_id: number, offered_shift_id: number) =>
@@ -229,8 +261,8 @@ export const SwapsAPI = {
     pendingManager: (location_id: number) =>
         api.get('/swaps/pending-manager', { params: { location_id } }),
 
-    managerDecide: (swap_id: number, approve: boolean) =>
-        api.post(`/swaps/${swap_id}/decide`, { approve }),
+    managerDecide: (swap_id: number, approve: boolean, allow_outside_availability = false) =>
+        api.post(`/swaps/${swap_id}/decide`, { approve, allow_outside_availability }),
 };
 
 // ── Drops API ──────────────────────────────────────────────────────────────────
@@ -280,24 +312,31 @@ export const AvailabilityAPI = {
 };
 
 // ── AI API ─────────────────────────────────────────────────────────────────────
+// One assistant answer is usually two or three model calls (ask → look up the schedule →
+// answer), and the server allows each of them up to NVIDIA_TIMEOUT_SECONDS (60s by
+// default). The app-wide 15s timeout cut these requests off while the server was still
+// working, so AI calls get their own, longer one.
+export const AI_REQUEST_TIMEOUT_MS = 120000;
+const aiOpts = { timeout: AI_REQUEST_TIMEOUT_MS };
+
 export const AIAPI = {
     chat: (body: {
         message: string;
         location_id: number;
         history?: { role: string; content: string }[];
-    }) => api.post('/ai/chat', body),
+    }) => api.post('/ai/chat', body, aiOpts),
 
     generateSchedule: (location_id: number, week_start: string) =>
-        api.post('/ai/generate-schedule', { location_id, week_start }),
+        api.post('/ai/generate-schedule', { location_id, week_start }, aiOpts),
 
     jobStatus: (job_id: string) =>
         api.get(`/ai/job/${job_id}`),
 
     predictStaffing: (location_id: number, week_start: string) =>
-        api.post('/ai/predict-staffing', { location_id, week_start }),
+        api.post('/ai/predict-staffing', { location_id, week_start }, aiOpts),
 
     swapRecommendations: (swap_id: number, location_id: number) =>
-        api.post('/ai/swap-recommendations', { swap_id, location_id }),
+        api.post('/ai/swap-recommendations', { swap_id, location_id }, aiOpts),
 };
 
 // ── Time Entry API ─────────────────────────────────────────────────────────────

@@ -47,9 +47,9 @@ export default function LoginPage() {
             <div className="w-full max-w-sm space-y-6">
                 <div className="space-y-1 text-center">
                     <span className="mx-auto mb-3 flex size-10 items-center justify-center rounded-xl bg-primary text-lg font-bold text-primary-foreground">
-                        M
+                        P
                     </span>
-                    <h1 className="text-2xl font-semibold text-foreground">MySchedule</h1>
+                    <h1 className="text-2xl font-semibold text-foreground">ProShifts</h1>
                     <p className="text-sm text-muted-foreground">Sign in to manage your team</p>
                 </div>
 
@@ -64,7 +64,7 @@ export default function LoginPage() {
                             <p className="text-muted-foreground">
                                 We sent a verification link to <span className="font-medium text-foreground">{unverifiedEmail}</span>{" "}
                                 when your account was created. Open it, then sign in again. The link expires after 24
-                                hours — if it has, contact your company owner or MySchedule support.
+                                hours — if it has, contact your company owner or ProShifts support.
                             </p>
                         </div>
                     </div>
@@ -117,7 +117,7 @@ export default function LoginPage() {
                 </form>
 
                 <p className="text-center text-xs text-muted-foreground">
-                    Forgot your password? Reset it from the MySchedule mobile app.
+                    Forgot your password? Reset it from the ProShifts mobile app.
                 </p>
             </div>
         </div>

@@ -7,6 +7,7 @@ import { listLocations } from "@/lib/api/locations";
 import { getPendingCounts, type PendingCounts } from "@/lib/api/requests";
 import { useQuery } from "@/lib/hooks/use-query";
 import { APPROVER_ROLES, MANAGER_ROLES } from "@/lib/theme/tokens";
+import { safeTz } from "@/lib/format";
 import type { Location, User } from "@/lib/types";
 
 const LOCATION_STORAGE_KEY = "myschedule.locationId";
@@ -16,7 +17,10 @@ type ManagerContextValue = {
     user: User | null;
     locations: Location[];
     location: Location | null;
+    /** IANA timezone of the selected location; every schedule date/time uses it. */
+    timezone: string;
     setLocationId: (id: number) => void;
+    refreshLocations: () => Promise<void>;
     /** Owners and managers can approve requests; supervisors can view them. */
     canApprove: boolean;
     pending: PendingCounts | undefined;
@@ -85,7 +89,9 @@ export function ManagerProvider({ children }: { children: React.ReactNode }) {
         user: me.data ?? null,
         locations: locs.data ?? [],
         location,
+        timezone: safeTz(location?.timezone),
         setLocationId,
+        refreshLocations: locs.refetch,
         canApprove: APPROVER_ROLES.includes(role as (typeof APPROVER_ROLES)[number]),
         pending: pending.data,
         refreshPending: pending.refetch,

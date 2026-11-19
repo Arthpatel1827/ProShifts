@@ -4,7 +4,7 @@ import { useState } from "react";
 import { AlertTriangle, ArrowLeftRight, CalendarOff, Check, Inbox, LogOut, X } from "lucide-react";
 import { useManager } from "@/components/manager/manager-context";
 import { Button } from "@/components/ui/button";
-import { Dialog } from "@/components/ui/dialog";
+import { ConfirmDialog, Dialog } from "@/components/ui/dialog";
 import { Field, Textarea } from "@/components/ui/form";
 import { Avatar, Badge, Card, EmptyState, ErrorState, Skeleton } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
@@ -97,7 +97,9 @@ export default function RequestsPage() {
                     empty="No swaps waiting for approval"
                     emptyHint="Swaps appear here once both employees have agreed to trade."
                     items={(swaps.data ?? []).map((s) => {
-                        const conflicts = [...(s.conflicts?.requester ?? []), ...(s.conflicts?.receiver ?? [])];
+                        const v = s.validation;
+                        // Older servers only send overlaps; newer ones send the full check.
+                        const conflicts = v ? [] : [...(s.conflicts?.requester ?? []), ...(s.conflicts?.receiver ?? [])];
                         return (
                             <RequestCard
                                 key={s.swap_id}
@@ -111,12 +113,23 @@ export default function RequestsPage() {
                                 reason={s.reason}
                                 canApprove={canApprove}
                                 conflicts={conflicts}
-                                onDecide={async (approve) => {
-                                    const res = await decideSwap(s.swap_id, approve);
+                                blockers={v?.errors}
+                                cautions={[...(v?.availability ?? []), ...(v?.warnings ?? [])]}
+                                confirmApprove={
+                                    v?.needs_override
+                                        ? { title: "Approve anyway?", description: `${v.availability.join(". ")}. Check with them before approving.` }
+                                        : undefined
+                                }
+                                onDecide={async (approve, override) => {
+                                    try {
+                                        await decideSwap(s.swap_id, approve, override);
+                                    } catch (err) {
+                                        // The schedule changed since this list loaded: show the new result.
+                                        void swaps.refetch();
+                                        throw err;
+                                    }
                                     after(() => swaps.setData((list = []) => list.filter((x) => x.swap_id !== s.swap_id)));
-                                    return res.conflicts && (res.conflicts.requester.length || res.conflicts.receiver.length)
-                                        ? "Approved with scheduling conflicts — check the schedule."
-                                        : undefined;
+                                    return undefined;
                                 }}
                             >
                                 <div className="grid gap-2 sm:grid-cols-2">
@@ -220,15 +233,16 @@ function RequestList({
 }
 
 function ShiftBox({ label, shift }: { label: string; shift: RequestShift | null }) {
+    const { timezone: tz } = useManager();
     if (!shift?.start_time || !shift.end_time) {
         return <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">Shift no longer exists.</div>;
     }
     return (
         <div className="rounded-md bg-muted/60 p-3">
             <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
-            <p className="mt-1 text-sm font-medium text-foreground">{formatDate(shift.start_time, { weekday: "long" })}</p>
+            <p className="mt-1 text-sm font-medium text-foreground">{formatDate(shift.start_time, { weekday: "long" }, tz)}</p>
             <p className="text-sm text-muted-foreground">
-                {formatTimeRange(shift.start_time, shift.end_time)}
+                {formatTimeRange(shift.start_time, shift.end_time, tz)}
                 {shift.role ? ` · ${shift.role}` : ""}
             </p>
         </div>
@@ -242,6 +256,9 @@ function RequestCard({
     reason,
     canApprove,
     conflicts,
+    blockers,
+    cautions,
+    confirmApprove,
     approveHint,
     onDecide,
     children,
@@ -252,18 +269,32 @@ function RequestCard({
     reason: string | null;
     canApprove: boolean;
     conflicts?: ShiftConflict[];
+    /** Hard conflicts in the resulting schedule: approving is not possible. */
+    blockers?: string[];
+    /** Shown, not blocking (availability, overtime, role). */
+    cautions?: string[];
+    /** Ask before approving (e.g. outside availability), then approve with override. */
+    confirmApprove?: { title: string; description: string };
     approveHint?: string;
     /** Resolves to an optional follow-up message shown after the decision. */
-    onDecide: (approve: boolean) => Promise<string | undefined>;
+    onDecide: (approve: boolean, override?: boolean) => Promise<string | undefined>;
     children: React.ReactNode;
 }) {
+    const { timezone: tz } = useManager();
     const toast = useToast();
     const [busy, setBusy] = useState<"approve" | "reject" | null>(null);
+    const [asking, setAsking] = useState(false);
+    const blocked = !!blockers?.length;
 
-    async function decide(approve: boolean) {
+    async function decide(approve: boolean, override = false) {
+        if (approve && confirmApprove && !override) {
+            setAsking(true);
+            return;
+        }
+        setAsking(false);
         setBusy(approve ? "approve" : "reject");
         try {
-            const note = await onDecide(approve);
+            const note = await onDecide(approve, override);
             toast.success(approve ? "Approved" : "Rejected", note ?? `${name} has been notified.`);
         } catch (err) {
             toast.error("Couldn't record the decision", err instanceof Error ? err.message : undefined);
@@ -288,6 +319,30 @@ function RequestCard({
                 {reason && (
                     <blockquote className="border-l-2 border-border pl-3 text-sm text-muted-foreground">&ldquo;{reason}&rdquo;</blockquote>
                 )}
+                {blocked && (
+                    <div role="alert" className="flex gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm">
+                        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
+                        <div>
+                            <p className="font-medium text-foreground">This swap can&apos;t be approved</p>
+                            <ul className="text-xs text-muted-foreground">
+                                {blockers!.map((b) => (
+                                    <li key={b}>{b}</li>
+                                ))}
+                            </ul>
+                            <p className="mt-1 text-xs text-muted-foreground">Reject it, or fix the schedule first.</p>
+                        </div>
+                    </div>
+                )}
+                {!!cautions?.length && (
+                    <div className="flex gap-2 rounded-md bg-warning/10 px-3 py-2 text-sm">
+                        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
+                        <ul className="text-xs text-foreground">
+                            {cautions.map((c) => (
+                                <li key={c}>{c}</li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
                 {!!conflicts?.length && (
                     <div role="alert" className="flex gap-2 rounded-md bg-warning/10 px-3 py-2 text-sm">
                         <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" />
@@ -296,7 +351,7 @@ function RequestCard({
                             <ul className="text-xs text-muted-foreground">
                                 {conflicts.map((c) => (
                                     <li key={c.shift_id}>
-                                        Clashes with {formatDate(c.start_time)} {formatTimeRange(c.start_time, c.end_time)}
+                                        Clashes with {formatDate(c.start_time, {}, tz)} {formatTimeRange(c.start_time, c.end_time, tz)}
                                         {c.role ? ` (${c.role})` : ""}
                                     </li>
                                 ))}
@@ -312,10 +367,21 @@ function RequestCard({
                     <Button variant="outline" onClick={() => decide(false)} disabled={!!busy}>
                         <X /> {busy === "reject" ? "Rejecting…" : "Reject"}
                     </Button>
-                    <Button onClick={() => decide(true)} disabled={!!busy}>
+                    <Button onClick={() => decide(true)} disabled={!!busy || blocked} title={blocked ? "Resolve the conflict first" : undefined}>
                         <Check /> {busy === "approve" ? "Approving…" : "Approve"}
                     </Button>
                 </div>
+            )}
+            {confirmApprove && (
+                <ConfirmDialog
+                    open={asking}
+                    onOpenChange={setAsking}
+                    title={confirmApprove.title}
+                    description={confirmApprove.description}
+                    confirmLabel="Approve anyway"
+                    pending={busy === "approve"}
+                    onConfirm={() => decide(true, true)}
+                />
             )}
         </Card>
     );

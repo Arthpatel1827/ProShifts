@@ -289,7 +289,10 @@ export default function TodayShiftStatusCard({
             icon: 'checkmark-circle-outline',
             label: 'on shift',
             primaryText: formatDuration(liveMinutes),
-            secondaryText: `ends ${formatTime(todayShift!.end_time)}`,
+            // Clocked in early: say when the shift starts rather than only when it ends.
+            secondaryText: now.getTime() < new Date(todayShift!.start_time).getTime()
+                ? `starts ${formatTime(todayShift!.start_time)}`
+                : `ends ${formatTime(todayShift!.end_time)}`,
             actionLabel: 'Clock Out',
             actionIcon: 'log-out-outline',
             onAction: onClockOut,

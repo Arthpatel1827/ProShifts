@@ -254,6 +254,20 @@ export default function ProfileSettingsScreen({ navigation }: any) {
                     />
                 </View>
 
+                {/* ── Clock-in PIN for the punch-in tablet ── */}
+                <Pressable
+                    style={[styles.card, { flexDirection: 'row', alignItems: 'center', gap: 12 }]}
+                    onPress={() => navigation.navigate('ClockPin')}
+                    accessibilityRole="button"
+                >
+                    <Ionicons name="keypad-outline" size={22} color={colors.primary} />
+                    <View style={{ flex: 1 }}>
+                        <Text style={styles.cardTitle}>Clock-in PIN</Text>
+                        <Text style={{ fontSize: 12, color: colors.gray }}>Your 4-digit PIN for the punch-in tablet at work</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color={colors.gray} />
+                </Pressable>
+
                 {/* ── Security — Biometric toggle ── */}
                 {bioSupported && (
                     <View style={styles.card}>

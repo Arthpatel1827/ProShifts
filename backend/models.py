@@ -73,7 +73,8 @@ class AppUser(db.Model):
         foreign_keys="[ShiftAssignment.user_id]",
     )
     notifications = db.relationship("Notification",  back_populates="user", cascade="all, delete-orphan")
-    time_entries  = db.relationship("TimeEntry",     back_populates="user", cascade="all, delete-orphan")
+    time_entries  = db.relationship("TimeEntry",     back_populates="user", cascade="all, delete-orphan",
+                                    foreign_keys="[TimeEntry.user_id]")
 
 
 # ── 4. UserDocument ───────────────────────────────────────────────────────────
@@ -126,6 +127,10 @@ class Employment(db.Model):
     emergency_contact    = db.Column(Text, nullable=True)
     emergency_phone      = db.Column(Text, nullable=True)
     notes                = db.Column(Text, nullable=True)
+    # Personal 4-digit clock-in PIN for the store's punch-in tablet: a keyed hash
+    # (never the PIN), unique within the company so the tablet knows who it is.
+    kiosk_pin_hash       = db.Column(Text, nullable=True, index=True)
+    kiosk_pin_set_at     = db.Column(DateTime, nullable=True)
 
     user     = db.relationship("AppUser",  back_populates="employments")
     company  = db.relationship("Company",  back_populates="employments")
@@ -180,6 +185,8 @@ class Shift(db.Model):
     assignments  = db.relationship("ShiftAssignment", back_populates="shift", cascade="all, delete-orphan")
     swaps        = db.relationship("ShiftSwap", back_populates="shift", cascade="all, delete-orphan", foreign_keys="[ShiftSwap.shift_id]")
     time_entries = db.relationship("TimeEntry",       back_populates="shift", cascade="all, delete-orphan")
+    breaks       = db.relationship("ShiftBreak", back_populates="shift", cascade="all, delete-orphan",
+                                   order_by="ShiftBreak.start_time")
 
     __table_args__ = (
         CheckConstraint(
@@ -187,6 +194,21 @@ class Shift(db.Model):
             name="ck_shift_status",
         ),
     )
+
+
+# ── 8b. ShiftBreak ────────────────────────────────────────────────────────────
+class ShiftBreak(db.Model):
+    """A *scheduled* break inside a shift (when the break is planned). What was actually
+    taken lives in BreakEntry on the time entry; editing one never touches the other.
+    Shift.break_minutes stays the total, so labor cost and the AI keep working."""
+    __tablename__ = "shift_break"
+
+    break_id   = db.Column(BigInteger, primary_key=True)
+    shift_id   = db.Column(BigInteger, db.ForeignKey("shift.shift_id", ondelete="CASCADE"), nullable=False, index=True)
+    start_time = db.Column(DateTime(timezone=True), nullable=False)
+    end_time   = db.Column(DateTime(timezone=True), nullable=False)
+
+    shift = db.relationship("Shift", back_populates="breaks")
 
 
 # ── 9. ShiftAssignment ────────────────────────────────────────────────────────
@@ -266,8 +288,11 @@ class TimeEntry(db.Model):
     total_minutes = db.Column(Integer, nullable=True)
     notes         = db.Column(Text, nullable=True)
     created_at    = db.Column(DateTime, nullable=False, default=datetime.utcnow)
+    # Last manager correction (the full history is in time_entry_audit).
+    corrected_at  = db.Column(DateTime, nullable=True)
+    corrected_by  = db.Column(BigInteger, db.ForeignKey("app_user.user_id", ondelete="SET NULL"), nullable=True)
 
-    user   = db.relationship("AppUser", back_populates="time_entries")
+    user   = db.relationship("AppUser", back_populates="time_entries", foreign_keys=[user_id])
     shift  = db.relationship("Shift",   back_populates="time_entries")
     breaks = db.relationship(
         "BreakEntry",
@@ -293,6 +318,45 @@ class BreakEntry(db.Model):
     duration_minutes = db.Column(Integer, nullable=True)
 
     time_entry = db.relationship("TimeEntry", back_populates="breaks")
+
+
+# ── 13b. TimeEntryAudit ────────────────────────────────────────────────────────
+class TimeEntryAudit(db.Model):
+    """Every manager correction to worked time: who, when, what it was, what it became,
+    and why. Rows are only ever added."""
+    __tablename__ = "time_entry_audit"
+
+    audit_id   = db.Column(BigInteger, primary_key=True)
+    entry_id   = db.Column(BigInteger, db.ForeignKey("time_entry.entry_id", ondelete="CASCADE"), nullable=False, index=True)
+    break_id   = db.Column(BigInteger, nullable=True)
+    changed_by = db.Column(BigInteger, db.ForeignKey("app_user.user_id", ondelete="SET NULL"), nullable=True)
+    changed_at = db.Column(DateTime, nullable=False, default=datetime.utcnow)
+    action     = db.Column(Text, nullable=False)   # clock_in | clock_out | break_added | break_changed | break_removed
+    old_value  = db.Column(Text, nullable=True)
+    new_value  = db.Column(Text, nullable=True)
+    reason     = db.Column(Text, nullable=False)
+
+    changer = db.relationship("AppUser", foreign_keys=[changed_by])
+
+
+# ── 13c. KioskDevice ──────────────────────────────────────────────────────────
+class KioskDevice(db.Model):
+    """A punch-in tablet a manager set up at a location. Staff don't sign in on it: the
+    device token (stored hashed) says which location it is."""
+    __tablename__ = "kiosk_device"
+
+    device_id       = db.Column(BigInteger, primary_key=True)
+    location_id     = db.Column(BigInteger, db.ForeignKey("location.loc_id", ondelete="CASCADE"), nullable=False, index=True)
+    name            = db.Column(Text, nullable=False)
+    token_hash      = db.Column(db.String(64), nullable=False, unique=True)
+    created_by      = db.Column(BigInteger, db.ForeignKey("app_user.user_id", ondelete="SET NULL"), nullable=True)
+    created_at      = db.Column(DateTime, nullable=False, default=datetime.utcnow)
+    last_seen_at    = db.Column(DateTime, nullable=True)
+    revoked_at      = db.Column(DateTime, nullable=True)
+    failed_attempts = db.Column(Integer, nullable=False, default=0)
+    locked_until    = db.Column(DateTime, nullable=True)
+
+    location = db.relationship("Location")
 
 
 # ── 14. OnboardingInvite ──────────────────────────────────────────────────────

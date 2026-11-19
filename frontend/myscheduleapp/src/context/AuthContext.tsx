@@ -22,6 +22,7 @@ import {
     isBiometricEnabled,
 } from '../utils/biometrics';
 import { AuthAPI } from '../api/api';
+import { onSessionExpired } from '../utils/sessionEvents';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -175,6 +176,18 @@ export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
 
         bootSession();
         return () => { mountedRef.current = false; };
+    }, []);
+
+    // ── Dead session — the API layer couldn't refresh the stored tokens ───────
+    // (expired refresh token, or tokens from a different server). Sign out so the user lands
+    // on the login screen instead of an app where every request fails.
+    useEffect(() => {
+        return onSessionExpired(() => {
+            if (!mountedRef.current) return;
+            setIsAuthenticated(false);
+            setUser(null);
+            apolloClient.clearStore().catch(() => { /* ignore */ });
+        });
     }, []);
 
     // ── Login ─────────────────────────────────────────────────────────────────

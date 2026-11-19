@@ -46,7 +46,10 @@ class RegistrationService:
         loc_addr = self._fmt_location_address(
             location_d["address"].strip(), location_d["postal_code"].strip()
         )
-        timezone = location_d.get("timezone", "UTC")
+        from utils.timezones import is_valid_timezone
+        timezone = location_d.get("timezone") or "UTC"
+        if not is_valid_timezone(timezone):
+            raise ValueError({"location": f"Unknown timezone '{timezone}'. Use an IANA name such as America/Toronto."})
 
         try:
             with db.session.begin():

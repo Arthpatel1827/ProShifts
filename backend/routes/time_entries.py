@@ -2,6 +2,7 @@
 from flask import Blueprint
 from flask_jwt_extended import jwt_required
 from controllers.time_entry_controller import TimeEntryController
+from extensions import limiter
 
 router = Blueprint("time_entries", __name__, url_prefix="/time-entries")
 ctrl   = TimeEntryController()
@@ -22,6 +23,8 @@ def get_history():
 
 @router.post("/clock-in")
 @jwt_required()
+# A daily 4-digit PIN must not be guessable by retrying: 30 tries an hour per person.
+@limiter.limit("10 per minute;30 per hour")
 def clock_in():
     return ctrl.clock_in()
 
@@ -79,3 +82,34 @@ def generate_pin():
 @jwt_required()
 def get_team_status():
     return ctrl.get_team_status()
+
+# ── Manager corrections to worked time (audited) ──────────────────────────────
+@router.get("/manage")
+@jwt_required()
+def list_for_location():
+    return ctrl.list_for_location()
+
+@router.patch("/<int:entry_id>")
+@jwt_required()
+def correct_entry(entry_id):
+    return ctrl.correct_entry(entry_id)
+
+@router.post("/<int:entry_id>/breaks")
+@jwt_required()
+def add_break(entry_id):
+    return ctrl.add_break(entry_id)
+
+@router.patch("/breaks/<int:break_id>")
+@jwt_required()
+def update_break(break_id):
+    return ctrl.update_break(break_id)
+
+@router.delete("/breaks/<int:break_id>")
+@jwt_required()
+def delete_break(break_id):
+    return ctrl.delete_break(break_id)
+
+@router.get("/<int:entry_id>/audit")
+@jwt_required()
+def audit_log(entry_id):
+    return ctrl.audit_log(entry_id)

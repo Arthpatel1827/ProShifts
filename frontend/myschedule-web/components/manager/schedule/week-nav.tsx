@@ -1,20 +1,19 @@
 "use client";
 
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { addDaysToKey, formatKey } from "@/lib/format";
 
 type WeekNavProps = {
-    weekStart: Date;
+    /** Monday of the week, "YYYY-MM-DD" at the location. */
+    weekStart: string;
     onPrevWeek: () => void;
     onNextWeek: () => void;
     onToday: () => void;
 };
 
-function formatWeekRange(start: Date): string {
-    const end = new Date(start);
-    end.setDate(end.getDate() + 6);
-
-    const startStr = start.toLocaleDateString("en-CA", { month: "short", day: "numeric" });
-    const endStr = end.toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
+function formatWeekRange(start: string): string {
+    const startStr = formatKey(start, { weekday: undefined, month: "short", day: "numeric" });
+    const endStr = formatKey(addDaysToKey(start, 6), { weekday: undefined, month: "short", day: "numeric", year: "numeric" });
     return `${startStr} – ${endStr}`;
 }
 

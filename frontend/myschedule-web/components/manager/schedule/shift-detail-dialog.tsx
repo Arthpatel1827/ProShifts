@@ -2,32 +2,41 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Clock, Coffee, MessageSquare, Pencil, StickyNote, Trash2, UserMinus, UserPlus } from "lucide-react";
+import { ArrowLeftRight, Clock, Coffee, Copy, MessageSquare, Pencil, StickyNote, Trash2, UserMinus, UserPlus } from "lucide-react";
 import { Dialog, ConfirmDialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/form";
 import { Avatar, Badge } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
-import { assignUser, cancelShift, unassignUser } from "@/lib/api/shifts";
+import { assignUser, cancelShift, isOutsideAvailability, unassignUser } from "@/lib/api/shifts";
 import { createShiftThread } from "@/lib/api/messaging";
-import { formatDate, formatHours, formatTimeRange, shiftHours } from "@/lib/format";
+import { formatDate, formatHours, formatTime, formatTimeRange, shiftHours } from "@/lib/format";
 import { shiftStatusTone } from "@/lib/theme/tokens";
 import type { RoleWithStaff, Shift } from "@/lib/types";
 
 type Props = {
     shift: Shift | null;
+    /** Location timezone for displayed dates and times. */
+    tz: string;
     onOpenChange: (open: boolean) => void;
     roles: RoleWithStaff[];
     names: Map<number, string>;
     onEdit: (shift: Shift) => void;
     onChanged: (shift: Shift) => void;
+    /** Copy this shift to other days. */
+    onDuplicate?: (shift: Shift) => void;
+    /** Hand this shift from one person to another in one validated change. */
+    onReplace?: (shift: Shift, fromUserId: number, toUserId: number) => void;
 };
 
-export function ShiftDetailDialog({ shift, onOpenChange, roles, names, onEdit, onChanged }: Props) {
+export function ShiftDetailDialog({ shift, tz, onOpenChange, roles, names, onEdit, onChanged, onDuplicate, onReplace }: Props) {
     const toast = useToast();
+    const [replacing, setReplacing] = useState<{ from: number; to: string } | null>(null);
     const [assignee, setAssignee] = useState("");
     const [busy, setBusy] = useState<string | null>(null);
     const [confirmCancel, setConfirmCancel] = useState(false);
+    // Set when the API says the person isn't available then; the manager may assign anyway.
+    const [availabilityWarning, setAvailabilityWarning] = useState<{ userId: number; message: string } | null>(null);
 
     const candidates = useMemo(() => {
         if (!shift) return [];
@@ -59,16 +68,29 @@ export function ShiftDetailDialog({ shift, onOpenChange, roles, names, onEdit, o
         }
     }
 
-    async function handleAssign() {
-        if (!shift || !assignee) return;
-        const userId = Number(assignee);
-        const ok = await run("assign", () => assignUser(shift.shift_id, userId), `${names.get(userId) ?? "Employee"} assigned`);
-        if (ok !== undefined) {
+    async function handleAssign(override = false, forUser?: number) {
+        if (!shift) return;
+        const userId = forUser ?? Number(assignee);
+        if (!userId) return;
+        setBusy("assign");
+        try {
+            await assignUser(shift.shift_id, userId, override);
+            toast.success(`${names.get(userId) ?? "Employee"} assigned`);
             setAssignee("");
+            setAvailabilityWarning(null);
             onChanged({
                 ...shift,
                 assignments: [...shift.assignments, { user_id: userId, assigned_at: new Date().toISOString() }],
             });
+        } catch (err) {
+            if (!override && isOutsideAvailability(err)) {
+                setAvailabilityWarning({ userId, message: err.message });
+            } else {
+                setAvailabilityWarning(null);
+                toast.error("That didn't work", err instanceof Error ? err.message : undefined);
+            }
+        } finally {
+            setBusy(null);
         }
     }
 
@@ -100,7 +122,7 @@ export function ShiftDetailDialog({ shift, onOpenChange, roles, names, onEdit, o
             <Dialog
                 open={!!shift}
                 onOpenChange={onOpenChange}
-                title={formatDate(shift.start_time, { weekday: "long", month: "long" })}
+                title={formatDate(shift.start_time, { weekday: "long", month: "long" }, tz)}
                 description={shift.role ?? "Any role"}
                 footer={
                     !isCancelled && (
@@ -113,6 +135,11 @@ export function ShiftDetailDialog({ shift, onOpenChange, roles, names, onEdit, o
                             >
                                 <Trash2 /> Cancel shift
                             </Button>
+                            {onDuplicate && (
+                                <Button variant="outline" onClick={() => onDuplicate(shift)} disabled={!!busy}>
+                                    <Copy /> Duplicate
+                                </Button>
+                            )}
                             <Button variant="outline" onClick={() => onEdit(shift)} disabled={!!busy}>
                                 <Pencil /> Edit
                             </Button>
@@ -133,7 +160,7 @@ export function ShiftDetailDialog({ shift, onOpenChange, roles, names, onEdit, o
                         <div className="flex items-center gap-2">
                             <Clock className="size-4 text-muted-foreground" />
                             <dt className="sr-only">Time</dt>
-                            <dd>{formatTimeRange(shift.start_time, shift.end_time)}</dd>
+                            <dd>{formatTimeRange(shift.start_time, shift.end_time, tz)}</dd>
                         </div>
                         <div className="flex items-center gap-2">
                             <Coffee className="size-4 text-muted-foreground" />
@@ -142,6 +169,15 @@ export function ShiftDetailDialog({ shift, onOpenChange, roles, names, onEdit, o
                                 {shift.break_minutes} min break · {formatHours(Math.round(hours * 10) / 10)} paid
                             </dd>
                         </div>
+                        {!!shift.breaks?.length && (
+                            <div className="col-span-2 flex items-start gap-2">
+                                <Coffee className="mt-0.5 size-4 text-muted-foreground" />
+                                <dt className="sr-only">Planned breaks</dt>
+                                <dd className="text-muted-foreground">
+                                    Breaks: {shift.breaks.map((b) => `${formatTime(b.start_time, tz)}–${formatTime(b.end_time, tz)}`).join(", ")}
+                                </dd>
+                            </div>
+                        )}
                         {shift.notes && (
                             <div className="col-span-2 flex items-start gap-2">
                                 <StickyNote className="mt-0.5 size-4 text-muted-foreground" />
@@ -163,10 +199,44 @@ export function ShiftDetailDialog({ shift, onOpenChange, roles, names, onEdit, o
                             <ul className="divide-y divide-border rounded-md border border-border">
                                 {shift.assignments.map((a) => {
                                     const name = names.get(a.user_id) ?? `Employee #${a.user_id}`;
+                                    if (replacing?.from === a.user_id) {
+                                        return (
+                                            <li key={a.user_id} className="flex flex-wrap items-center gap-2 px-3 py-2">
+                                                <span className="text-sm">Replace {name} with</span>
+                                                <Select
+                                                    aria-label={`Replace ${name} with`}
+                                                    value={replacing.to}
+                                                    onChange={(e) => setReplacing({ from: a.user_id, to: e.target.value })}
+                                                    className="h-8 w-auto flex-1"
+                                                >
+                                                    <option value="">Choose someone…</option>
+                                                    {candidates.map((c) => (
+                                                        <option key={c.user_id} value={c.user_id}>{c.name}{c.role ? ` · ${c.role}` : ""}</option>
+                                                    ))}
+                                                </Select>
+                                                <Button size="sm" disabled={!replacing.to} onClick={() => {
+                                                    onReplace?.(shift, a.user_id, Number(replacing.to));
+                                                    setReplacing(null);
+                                                }}>Replace</Button>
+                                                <Button size="sm" variant="ghost" onClick={() => setReplacing(null)}>Cancel</Button>
+                                            </li>
+                                        );
+                                    }
                                     return (
                                         <li key={a.user_id} className="flex items-center gap-3 px-3 py-2">
                                             <Avatar name={name} className="size-7" />
                                             <span className="flex-1 text-sm">{name}</span>
+                                            {!isCancelled && onReplace && (
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    onClick={() => setReplacing({ from: a.user_id, to: "" })}
+                                                    disabled={!!busy || !candidates.length}
+                                                    aria-label={`Replace ${name}`}
+                                                >
+                                                    <ArrowLeftRight /> Replace
+                                                </Button>
+                                            )}
                                             {!isCancelled && (
                                                 <Button
                                                     variant="ghost"
@@ -205,7 +275,7 @@ export function ShiftDetailDialog({ shift, onOpenChange, roles, names, onEdit, o
                                         </option>
                                     ))}
                                 </Select>
-                                <Button onClick={handleAssign} disabled={!assignee || !!busy} className="h-auto">
+                                <Button onClick={() => handleAssign()} disabled={!assignee || !!busy} className="h-auto">
                                     <UserPlus /> {busy === "assign" ? "Assigning…" : "Assign"}
                                 </Button>
                             </div>
@@ -230,6 +300,16 @@ export function ShiftDetailDialog({ shift, onOpenChange, roles, names, onEdit, o
                     )}
                 </div>
             </Dialog>
+
+            <ConfirmDialog
+                open={!!availabilityWarning}
+                onOpenChange={(o) => !o && setAvailabilityWarning(null)}
+                title={`Assign ${availabilityWarning ? names.get(availabilityWarning.userId) ?? "them" : "them"} anyway?`}
+                description={`${availabilityWarning?.message ?? ""}. Check with them before assigning.`}
+                confirmLabel="Assign anyway"
+                pending={busy === "assign"}
+                onConfirm={() => availabilityWarning && handleAssign(true, availabilityWarning.userId)}
+            />
 
             <ConfirmDialog
                 open={confirmCancel}

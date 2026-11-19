@@ -1,13 +1,12 @@
 {
   "expo": {
-    "name": "my-scheduler-app",
+    "name": "ProShifts",
     "slug": "my-scheduler-app",
     "scheme": "myscheduler",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -21,7 +20,6 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.arthpatel1827.myschedulerapp"
     },

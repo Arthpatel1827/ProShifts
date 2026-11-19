@@ -2,12 +2,14 @@
 
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { ArrowLeft, MessageSquarePlus, MessagesSquare, Plus } from "lucide-react";
+import { ArrowLeft, MessageSquarePlus, MessagesSquare, Plus, ShieldCheck } from "lucide-react";
 import { useManager } from "@/components/manager/manager-context";
 import { Button } from "@/components/ui/button";
 import { Card, EmptyState, ErrorState, Skeleton } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
-import { listChannels, setupChannels } from "@/lib/api/messaging";
+import { listChannels, listLocationGroups, setupChannels } from "@/lib/api/messaging";
+import { Dialog } from "@/components/ui/dialog";
+import { MembersPanel } from "./members-panel";
 import { useQuery } from "@/lib/hooks/use-query";
 import { useChannelRooms, useSocketEvent } from "@/lib/hooks/use-socket";
 import { formatRelative } from "@/lib/format";
@@ -25,7 +27,8 @@ const GROUPS: { key: string; label: string; types: string[] }[] = [
 ];
 
 export default function MessagingPage() {
-    const { location, user } = useManager();
+    const { location, user, canApprove } = useManager();
+    const [manageOpen, setManageOpen] = useState(false);
     const toast = useToast();
     const channels = useQuery(["channels"], listChannels);
     // Deep link: /manager/messaging?channel=123 (used by Team → Message).
@@ -106,6 +109,11 @@ export default function MessagingPage() {
                         <Button variant="ghost" size="icon-sm" onClick={() => setNewOpen("dm")} aria-label="New direct message">
                             <MessageSquarePlus />
                         </Button>
+                        {canApprove && location && (
+                            <Button variant="ghost" size="icon-sm" onClick={() => setManageOpen(true)} aria-label="Manage groups" title="Manage group members and admins">
+                                <ShieldCheck />
+                            </Button>
+                        )}
                         <Button variant="ghost" size="icon-sm" onClick={() => setNewOpen("group")} aria-label="New group">
                             <Plus />
                         </Button>
@@ -163,7 +171,7 @@ export default function MessagingPage() {
                         >
                             <ArrowLeft className="size-4" /> All conversations
                         </button>
-                        <Conversation key={active.channel_id} channel={active} />
+                        <Conversation key={active.channel_id} channel={active} onChannelsChanged={() => void channels.refetch()} />
                     </>
                 ) : (
                     <EmptyState
@@ -175,6 +183,9 @@ export default function MessagingPage() {
                 )}
             </section>
 
+            {manageOpen && location && (
+                <ManageGroupsDialog locationId={location.id} onClose={() => { setManageOpen(false); void channels.refetch(); }} />
+            )}
             <NewConversationDialog mode={newOpen} onClose={() => setNewOpen(null)} onCreated={onCreated} />
         </Card>
     );
@@ -213,5 +224,38 @@ function ChannelRow({ channel: c, active, onSelect }: { channel: Channel; active
                 )}
             </button>
         </li>
+    );
+}
+
+
+/** Managers: every group at the location, including ones they aren't in. */
+function ManageGroupsDialog({ locationId, onClose }: { locationId: number; onClose: () => void }) {
+    const groups = useQuery(["location-groups", locationId], () => listLocationGroups(locationId));
+    const [pick, setPick] = useState<number | null>(null);
+    const chosen = groups.data?.find((g) => g.channel_id === pick) ?? null;
+    return (
+        <Dialog open onOpenChange={(o) => !o && onClose()} title="Manage groups"
+            description="Private groups and role channels: choose who's in them and who can manage them. #general is automatic.">
+            {groups.loading ? <Skeleton className="h-24" /> : groups.error ? <ErrorState message={groups.error.message} /> : (
+                <div className="grid gap-4 sm:grid-cols-[180px_1fr]">
+                    <ul className="space-y-1" role="listbox" aria-label="Groups">
+                        {(groups.data ?? []).map((g) => (
+                            <li key={g.channel_id}>
+                                <button role="option" aria-selected={pick === g.channel_id} onClick={() => setPick(g.channel_id)}
+                                    className={cn("flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+                                        pick === g.channel_id ? "bg-primary/10 font-medium text-primary" : "hover:bg-muted")}>
+                                    <ChannelIcon type={g.channel_type} className="size-4" />
+                                    <span className="flex-1 truncate">{g.name}</span>
+                                    <span className="text-xs text-muted-foreground">{g.member_count}</span>
+                                </button>
+                            </li>
+                        ))}
+                        {!groups.data?.length && <p className="text-sm text-muted-foreground">No groups yet.</p>}
+                    </ul>
+                    <div>{chosen ? <MembersPanel key={chosen.channel_id} channel={chosen} onChanged={() => void groups.refetch()} /> :
+                        <p className="text-sm text-muted-foreground">Pick a group to manage its members.</p>}</div>
+                </div>
+            )}
+        </Dialog>
     );
 }
