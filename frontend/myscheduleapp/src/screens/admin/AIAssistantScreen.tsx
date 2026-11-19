@@ -274,7 +274,7 @@ export default function AIAssistantScreen({ navigation }: any) {
 
     // ── Send message ──────────────────────────────────────────────────────────
     const sendMessage = useCallback(async (text: string) => {
-        if (!text.trim() || !selectedLocId) return;
+        if (!text.trim()) return;
 
         const userMsg: Message = {
             id:        uid(),
@@ -282,6 +282,21 @@ export default function AIAssistantScreen({ navigation }: any) {
             content:   text.trim(),
             timestamp: new Date(),
         };
+
+        // No location yet (the locations list failed to load — usually a signed-out session or no
+        // connection). Say so; sending nothing and showing nothing looks like a broken button.
+        if (!selectedLocId) {
+            setInput('');
+            setShowCommands(false);
+            setMessages(prev => [...prev, userMsg, {
+                id:        uid(),
+                role:      'assistant',
+                content:   "I can't tell which location to use because your locations haven't loaded. " +
+                           'Check your connection, or sign out and back in, then try again.',
+                timestamp: new Date(),
+            }]);
+            return;
+        }
 
         setMessages(prev => [...prev, userMsg]);
         setInput('');

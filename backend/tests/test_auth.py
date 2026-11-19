@@ -67,3 +67,28 @@ def test_health_reports_database_and_redis(client):
     res = client.get("/health")
     assert res.status_code == 200
     assert res.get_json() == {"status": "ok", "database": True, "redis": True}
+
+
+def test_token_signed_by_another_server_is_422_invalid_token(client, world):
+    # The mobile app tells "this phone holds a session from a different server" (422, body
+    # {"error": "Invalid token."}) from "expired" (401) and recovers by signing out. If this
+    # contract changes, the app's isSessionRejected() must change with it.
+    import jwt
+    foreign = jwt.encode({"sub": str(world.owner_a), "type": "access", "fresh": False,
+                          "jti": "x", "iat": 1, "exp": 4102444800},
+                         "a-different-servers-secret-key-0123456789", algorithm="HS256")
+    res = client.get("/admin/locations", headers={"Authorization": f"Bearer {foreign}"})
+    assert res.status_code == 422
+    assert res.get_json() == {"error": "Invalid token."}
+    refresh = client.post("/auth/refresh", headers={"Authorization": f"Bearer {foreign}"})
+    assert refresh.status_code == 422
+
+
+def test_expired_and_missing_tokens_are_401(client, world):
+    import jwt
+    from flask import current_app
+    with client.application.app_context():
+        expired = jwt.encode({"sub": str(world.owner_a), "type": "access", "fresh": False, "jti": "y",
+                              "iat": 1, "exp": 2}, current_app.config["JWT_SECRET_KEY"], algorithm="HS256")
+    assert client.get("/admin/locations", headers={"Authorization": f"Bearer {expired}"}).status_code == 401
+    assert client.get("/admin/locations").status_code == 401

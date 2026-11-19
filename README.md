@@ -32,14 +32,24 @@ app) on http://localhost:8080. Point the mobile app at it with
 
 The first owner account is created from the mobile app's sign-up flow.
 
-**Password-reset codes and email.** Email is off by default (`EMAIL_SENDING_ENABLED=false`),
-so nothing can be mailed. Until you set `EMAIL_SENDING_ENABLED=true` and the `MAIL_*` values in
-`.env`, the 6-digit reset code (and email-verification links) are written to the API log
-instead. The app still answers "if that email exists, a code has been sent". Read the code with:
+**A fresh database has no accounts.** Docker starts with an empty Postgres volume, so nobody can
+log in until an owner signs up (mobile app → Login → *Create one*). New accounts must verify their
+email before they can log in, and phones/tablets that were signed in to an older server need to
+sign in again.
+
+**Verification links, password-reset codes and email.** Email is off by default
+(`EMAIL_SENDING_ENABLED=false`), so nothing can be mailed. Until you set
+`EMAIL_SENDING_ENABLED=true` and the `MAIL_*` values in `.env`, the verification link and the
+6-digit reset code are written to the API log instead. The app still answers "if that email
+exists, a code has been sent" (it never reveals which emails have accounts — so no account, no
+code). Read them with:
 
 ```bash
-docker compose logs --tail 50 api | grep "Password reset OTP"       # PowerShell: ... | Select-String "Password reset OTP"
+docker compose logs --tail 100 api | grep -E "verification link|Password reset OTP"
+# PowerShell: docker compose logs --tail 100 api | Select-String "verification link|Password reset OTP"
 ```
+
+Open the verification link in a browser on any device that can reach the API address.
 
 Anyone who can read the API log can see those codes, so turn email on before real use. After
 editing `.env`, apply it with `docker compose up -d`.

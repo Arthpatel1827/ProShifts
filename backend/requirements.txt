@@ -15,6 +15,7 @@ Flask-SocketIO==5.3.6
 eventlet==0.35.2
 redis==5.0.4
 celery==5.4.0
+kombu==5.6.2  # Celery's Redis transport. 5.7+ needs redis-py 6.x and crash-loops the worker with redis==5.0.4
 pydantic==2.14.1  # AI request/response schemas (ai/schemas.py)
 pytz==2024.1
 requests==2.31.0

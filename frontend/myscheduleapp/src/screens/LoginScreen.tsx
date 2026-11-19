@@ -22,6 +22,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons }     from '@expo/vector-icons';
 
 import { AuthContext }  from '../context/AuthContext';
+import { AuthAPI }      from '../api/api';
+import { isSessionRejected } from '../utils/sessionEvents';
 import { colors }       from '../theme/colors';
 import {
     isBiometricAvailable,
@@ -96,6 +98,20 @@ export default function LoginScreen({ navigation }: any) {
             if (!storedToken || !storedUser) {
                 Alert.alert('Session expired', 'Please sign in with your password.');
                 return;
+            }
+
+            // Don't trust what's saved on the phone: ask the server. If the saved session is
+            // dead (expired, or from a different server) the API layer already signed it out;
+            // say so instead of opening an app where nothing loads. A network failure is not a
+            // dead session, so offline biometric sign-in still works.
+            try {
+                await AuthAPI.me();
+            } catch (e: any) {
+                if (isSessionRejected(e)) {
+                    setHasSession(false);
+                    Alert.alert('Session expired', 'Please sign in with your email and password.');
+                    return;
+                }
             }
 
             restoreSession(storedToken, storedUser);

@@ -3,6 +3,8 @@ import axios from 'axios';
 import { API_BASE_URL } from '../config/env';
 import { getAccessToken, getRefreshToken, setTokens, clearTokens } from '../utils/secureStore';
 export { describeApiError } from '../utils/apiError';
+import { clearStoredCredentials } from '../utils/biometrics';
+import { emitSessionExpired, isAuthEndpoint, isSessionRejected } from '../utils/sessionEvents';
 
 // ── Axios instance ─────────────────────────────────────────────────────────────
 export const api = axios.create({ baseURL: API_BASE_URL, timeout: 15000 });
@@ -14,30 +16,44 @@ api.interceptors.request.use(async (config) => {
     return config;
 });
 
-// Auto-refresh access token on 401
+// One refresh at a time: a screen that fires ten requests with a dead token must not send
+// ten refreshes. Every waiting request reuses the same new access token.
+let refreshing: Promise<string> | null = null;
+
+async function refreshAccessToken(): Promise<string> {
+    const refreshToken = await getRefreshToken();
+    if (!refreshToken) throw new Error('No refresh token');
+    const { data } = await axios.post(
+        `${API_BASE_URL}/auth/refresh`,
+        {},
+        { headers: { Authorization: `Bearer ${refreshToken}` }, timeout: 15000 }
+    );
+    await setTokens(data.access_token, refreshToken);
+    return data.access_token;
+}
+
+// A rejected session (expired / revoked / signed by another server) → try one refresh and replay
+// the request. If that fails too, the stored session is dead: clear it and tell the app to sign
+// the user out, so they land on the login screen instead of a screen where nothing loads.
 api.interceptors.response.use(
     (res) => res,
     async (error) => {
         const original = error.config;
-        if (error.response?.status === 401 && !original._retry) {
-            original._retry = true;
-            try {
-                const refreshToken = await getRefreshToken();
-                if (!refreshToken) throw new Error('No refresh token');
-                const { data } = await axios.post(
-                    `${API_BASE_URL}/auth/refresh`,
-                    {},
-                    { headers: { Authorization: `Bearer ${refreshToken}` } }
-                );
-                await setTokens(data.access_token, refreshToken);
-                original.headers.Authorization = `Bearer ${data.access_token}`;
-                return api(original);
-            } catch {
-                await clearTokens();
-                return Promise.reject(error);
-            }
+        if (!original || original._retry || isAuthEndpoint(original.url) || !isSessionRejected(error)) {
+            return Promise.reject(error);
         }
-        return Promise.reject(error);
+        original._retry = true;
+        try {
+            refreshing = refreshing ?? refreshAccessToken().finally(() => { refreshing = null; });
+            const token = await refreshing;
+            original.headers.Authorization = `Bearer ${token}`;
+            return api(original);
+        } catch {
+            await clearTokens();
+            await clearStoredCredentials();
+            emitSessionExpired();
+            return Promise.reject(error);
+        }
     }
 );
 
